@@ -175,7 +175,7 @@ async fn check_finished(data: Arc<Mutex<Handles>>) {
         let keys = data.handles.keys().cloned().collect::<Vec<String>>();
         for id in keys {
             if let Some(handle) = data.handles.remove(&id) {
-                if handle.joinhandle.is_finished() {
+                if handle.joinhandle.is_finished() && handle.expires < chrono::Utc::now().timestamp() {
                     let x = handle.joinhandle.await;
                     match x {
                         Ok(Ok(_)) => println!("{} finished successfully", id),
