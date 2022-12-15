@@ -155,7 +155,9 @@ impl Handles {
         // now we will move the file to the appropriate directory
         let output_path = if audio { CONFIG.get_audio_dir() } else { CONFIG.get_video_dir() };
         let output_path = output_path.join(format!("{}.{}", id, if audio { "mp3" } else { "mp4" }));
-        tokio::fs::rename(search_dir, output_path).await?;
+        tokio::fs::copy(search_dir.clone(), output_path).await?;
+        // now we will delete the tmp file
+        tokio::fs::remove_file(search_dir).await?;
 
         Ok(())
     }
