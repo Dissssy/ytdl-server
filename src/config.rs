@@ -1,7 +1,6 @@
-use std::{io::Write, path::PathBuf, str::FromStr, sync::Arc};
-
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
+use std::{io::Write, path::PathBuf, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 
 pub struct ConfigLoader {
