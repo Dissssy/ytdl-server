@@ -3,6 +3,7 @@ use actix_web::{get, web, HttpResponse, Responder};
 use anyhow::{anyhow, Error};
 use config::safe_get;
 use lazy_static::lazy_static;
+use notify::Watcher;
 use rand::seq::SliceRandom;
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -88,7 +89,8 @@ async fn main() {
             .service(get)
             .service(check)
             .service(get_now)
-    })
+            .service(get_info_route)
+    }).client_request_timeout(std::time::Duration::from_secs(0))
     .bind(format!(
         "{}:{}",
         CONFIG.get().await.host,
@@ -176,6 +178,15 @@ async fn get(
     };
 
     HttpResponse::Ok().body(id)
+}
+
+#[get("/get_info")]
+async fn get_info_route(info: web::Query<DownloadInfo>) -> impl Responder {
+    let res = get_formats(info.url.as_str()).await;
+    match res {
+        Ok(info) => HttpResponse::Ok().json(info),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
 }
 
 #[get("/check/{id}")]
@@ -319,12 +330,23 @@ impl Handles {
         let config = CONFIG.get().await;
 
         let url = info.url;
+
+        url_tests(url.as_str()).await?;
+
         let audio = info.audio.unwrap_or(false);
-        let path = PATH.join("tmp");
+        // let path = PATH.join("tmp");
+        let path = PathBuf::from(config.tmp_dir.clone());
 
         if !path.exists() {
             tokio::fs::create_dir(&path).await?;
         }
+
+        // let best_size: f64 = (config.max_file_size as f64 / 1024. / 1024.)
+        //     * match info.quality {
+        //         Quality::High => 1.0,
+        //         Quality::Medium => 0.33,
+        //         Quality::Low => 0.05,
+        //     };
 
         let mut args = vec![
             Arg::new_with_arg("--output", format!("{id}.%(ext)s").as_str()),
@@ -332,13 +354,15 @@ impl Handles {
             Arg::new("--embed-metadata"),
             Arg::new("--embed-thumbnail"),
             Arg::new("--no-playlist"),
-            Arg::new_with_arg(
-                "-f",
-                &format!(
-                    "best[filesize<{}M]/bv*+ba/b",
-                    config.max_file_size / 1024 / 1024
-                ),
-            ),
+            Arg::new("--force-ipv4"),
+            // Arg::new_with_arg(
+            //     "-f",
+            //     &format!(
+            //         "best{}[filesize<{}M]",
+            //         if audio { "audio" } else { "video" },
+            //         best_size.floor() as i64
+            //     ),
+            // ),
             Arg::new_with_arg(
                 "--max-filesize",
                 format!("{}M", config.max_file_size / 1024 / 1024).as_str(),
@@ -362,6 +386,8 @@ impl Handles {
             ));
             args.push(Arg::new_with_arg("--recode", "mp4"));
         }
+
+        println!("args: {:?}", args);
 
         let ytd_no_thumb = ytd_rs::YoutubeDL::new(
             &path,
@@ -387,17 +413,25 @@ impl Handles {
             return Err(anyhow!("File does not exist"));
         }
 
-        let output_path = if tmp {
-            config.get_tmp_dir()
-        } else if audio {
-            config.get_audio_dir()
-        } else {
-            config.get_video_dir()
-        };
-        let output_path = output_path.join(format!("{}.{}", id, if audio { "mp3" } else { "mp4" }));
-        tokio::fs::copy(search_dir.clone(), output_path).await?;
-
-        tokio::fs::remove_file(search_dir).await?;
+        // let output_path = if tmp {
+        //     config.get_tmp_dir()
+        // } else if audio {
+        //     config.get_audio_dir()
+        // } else {
+        //     config.get_video_dir()
+        // };
+        // we just download always to .get_tmp_dir() now so
+        if !tmp {
+            let output_path = if audio {
+                config.get_audio_dir()
+            } else {
+                config.get_video_dir()
+            };
+            let output_path =
+                output_path.join(format!("{}.{}", id, if audio { "mp3" } else { "mp4" }));
+            tokio::fs::copy(search_dir.clone(), output_path).await?;
+            tokio::fs::remove_file(search_dir).await?;
+        }
 
         Ok(())
     }
@@ -412,10 +446,34 @@ fn get_path() -> Result<PathBuf, Error> {
 async fn check_finished(data: Arc<Mutex<Handles>>) {
     let mut clean_up_tmp_files = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut clean_up_finished_downloads = tokio::time::interval(std::time::Duration::from_secs(60));
-    let mut refresh_config_file = tokio::time::interval(std::time::Duration::from_secs(30));
+    // let mut refresh_config_file = tokio::time::interval(std::time::Duration::from_secs(30));
+    let (notify, mut refresh_config_file) = tokio::sync::mpsc::channel(1);
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        match res {
+            Ok(notify::Event {
+                kind: notify::EventKind::Access(notify::event::AccessKind::Close(notify::event::AccessMode::Write)),
+                ..
+            }) => {
+                if let Err(e) = notify.try_send(()) {
+                    println!("Failed to send notify: {}", e);
+                }
+            }
+            Err(e) => println!("watch error: {:?}", e),
+            _ => {}
+        }
+    }).expect("Failed to create watcher");
+    let mut path = PATH.clone();
+    path.push("config.json");
+    watcher.watch(path.as_path(), notify::RecursiveMode::NonRecursive).expect("Failed to watch file");
+    let mut update_ytdlp = tokio::time::interval(std::time::Duration::from_secs(60 * 60 * 24));
 
     loop {
         tokio::select! {
+            _ = update_ytdlp.tick() => {
+                if let Err(e) = install_and_update_ytdlp().await {
+                    println!("Failed to update yt-dlp: {}", e);
+                }
+            }
             _ = clean_up_finished_downloads.tick() => {
                 let mut data = data.lock().await;
                 let keys = data.handles.keys().cloned().collect::<Vec<String>>();
@@ -461,8 +519,9 @@ async fn check_finished(data: Arc<Mutex<Handles>>) {
                     }
                 });
             }
-            _ = refresh_config_file.tick() => {
+            Some(()) = refresh_config_file.recv() => {
                 CONFIG.reload().await;
+                println!("Config reloaded");
             }
         }
     }
@@ -480,3 +539,278 @@ fn generate_api_key() -> String {
     let key: String = (0..128).map(|_| CHARS.choose(&mut rng).unwrap()).collect();
     key
 }
+
+async fn url_tests(url: &str) -> anyhow::Result<()> {
+    let start = url.split("TEST ").collect::<Vec<_>>();
+    
+    if start.len() != 2 {
+        return Ok(());
+    }
+
+    if start.first() != Some(&"") {
+        return Ok(());
+    }
+
+    let mut command = if let Some(command) = start.get(1) {
+        command.split(' ')
+    } else {
+        return Ok(());
+    };
+
+    match (command.next(), command.next()) {
+        (Some("ERROR"), _) => {
+            Err(anyhow!("Test error"))
+        }
+        (Some("DELAY"), Some(n)) => {
+            let n = n.parse::<u64>()?;
+
+            tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+            Err(anyhow!("Test delay finished"))
+        }
+        (x, y) => {
+            Err(anyhow!("Invalid test command: {} {}", x.unwrap_or(""), y.unwrap_or("")))
+        }
+    }
+}
+
+
+async fn install_and_update_ytdlp() -> anyhow::Result<()> {
+    // install yt-dlp if not installed
+    // update yt-dlp if installed
+    // check if yt-dlp is installed
+    // return version of yt-dlp
+    // return error if yt-dlp is not installed
+
+    let ytdlp = tokio::process::Command::new(
+        "python",
+    ).args(
+        [
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "yt-dlp",
+        ]
+    )
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::piped())
+    .stdin(std::process::Stdio::null())
+    .kill_on_drop(true).spawn()?;
+
+    // read all of stdin
+    let output = ytdlp.wait_with_output().await?;
+
+    let output = std::str::from_utf8(&output.stderr)?;
+
+    if output.contains("ERROR") {
+        return Err(anyhow!("{}", output));
+    }
+
+    Ok(())
+}
+
+
+async fn get_formats(url: &str) -> anyhow::Result<YtdlDump> {
+    // use yt-dlp to list all available VIDEO and AUDIO formats for a url ONLY
+    
+    let ytdlp = tokio::process::Command::new(
+        "yt-dlp",
+    ).args(
+        [
+            "--dump-json",
+            "--skip-download",
+            "--no-playlist",
+            "--force-ipv4",
+            url,
+        ]
+    )
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .stdin(std::process::Stdio::null())
+    .kill_on_drop(true).spawn()?;
+
+    // read all of stdin
+    let output = ytdlp.wait_with_output().await?;
+
+    let output = std::str::from_utf8(&output.stdout)?;
+
+    let mut output: RawDump = serde_json::from_str(output).or(Err(anyhow!("{}", output)))?;
+
+    output.strip_useless_formats();
+
+    Ok(output.into())
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct RawDump {
+    title: String,
+    formats: Vec<RawFormat>,
+    thumbnail: Option<String>,
+}
+
+impl RawDump {
+
+    fn strip_useless_formats(&mut self) {
+        self.formats.retain(|x| (x.acodec().is_some() || x.vcodec().is_some()) && x.filesize_approx().is_some());
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct RawFormat {
+    format_id: String,
+    acodec: Option<Codec>,
+    vcodec: Option<Codec>,
+    resolution: Resolution,
+    filesize_approx: Option<u64>,
+}
+
+impl RawFormat {
+
+    fn acodec(&self) -> Option<&str> {
+        self.acodec.as_ref().and_then(|x| x.as_option())
+    }
+
+    fn vcodec(&self) -> Option<&str> {
+        self.vcodec.as_ref().and_then(|x| x.as_option())
+    }
+
+    fn resolution(&self) -> Option<&str>{
+        self.resolution.as_option()
+    }
+
+    fn filesize_approx(&self) -> Option<u64> {
+        self.filesize_approx
+    }
+
+    fn filesize_approx_human(&self) -> Option<String> {
+        self.filesize_approx.map(human_readable_bytes)
+    }
+}
+
+#[derive(serde_enum_str::Deserialize_enum_str, Debug)]
+enum Codec {
+    #[serde(rename = "none")]
+    None,
+    #[serde(other)]
+    Some(String),
+}
+
+impl Codec {
+    fn as_option(&self) -> Option<&str> {
+        match self {
+            Codec::None => None,
+            Codec::Some(x) => Some(x),
+        }
+    }
+}
+
+#[derive(serde_enum_str::Deserialize_enum_str, Debug)]
+enum Resolution {
+    #[serde(rename = "audio only")]
+    None,
+    // catch all bc i just only wanted a special case for none
+    #[serde(other)]
+    Some(String),
+}
+
+impl Resolution {
+    fn as_option(&self) -> Option<&str> {
+        match self {
+            Resolution::None => None,
+            Resolution::Some(x) => Some(x),
+        }
+    }
+}
+
+fn human_readable_bytes(bytes: u64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+    let mut bytes = bytes as f64;
+    let mut i = 0;
+    while bytes >= 1024.0 && i < units.len() {
+        bytes /= 1024.0;
+        i += 1;
+    }
+    format!("{:.2} {}", bytes, units[i])
+}
+
+#[derive(serde::Serialize, Debug)]
+struct YtdlDump {
+    title: String,
+    formats: Vec<YtdlFormat>,
+    thumbnail: Option<String>,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct YtdlFormat {
+    format_id: String,
+    kind: FormatKind,
+    filesize_approx: Filesize
+}
+
+#[derive(serde::Serialize, Debug)]
+enum FormatKind {
+    Video(Video),
+    Audio(String),
+    Both { video: Video, audio: String },
+}
+
+#[derive(serde::Serialize, Debug)]
+struct Video {
+    codec: String,
+    resolution: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct Filesize {
+    bytes: u64,
+    human_readable: String,
+}
+
+impl From<RawDump> for YtdlDump {
+    fn from(dump: RawDump) -> Self {
+        Self {
+            title: dump.title,
+            formats: dump.formats.into_iter().flat_map(|i| {
+                YtdlFormat::try_from(i).inspect_err(|e| {
+                    println!("Failed to convert format: {}", e);
+                })
+            }).collect(),
+            thumbnail: dump.thumbnail,
+        }
+    }
+}
+
+impl TryFrom<RawFormat> for YtdlFormat {
+    type Error = anyhow::Error;
+
+    fn try_from(format: RawFormat) -> Result<Self, Self::Error> {
+        let kind = match (format.acodec(), format.vcodec()) {
+            (Some(audio), Some(video)) => FormatKind::Both {
+                video: Video {
+                    codec: video.to_string(),
+                    resolution: format.resolution().ok_or(anyhow!("No resolution for video"))?.to_string(),
+                },
+                audio: audio.to_string(),
+            },
+            (Some(audio), None) => FormatKind::Audio(audio.to_string()),
+            (None, Some(video)) => FormatKind::Video(
+                Video {
+                    codec: video.to_string(),
+                    resolution: format.resolution().ok_or(anyhow!("No resolution for video"))?.to_string(),
+                }
+            ),
+            (None, None) => return Err(anyhow!("No audio or video codec")),
+        };
+
+        Ok(Self {
+            kind,
+            filesize_approx: Filesize {
+                bytes: format.filesize_approx().unwrap_or(0),
+                human_readable: format.filesize_approx_human().unwrap_or_default(),
+            },
+            format_id: format.format_id,
+        })
+    }
+}
+
+// change download now to spit the data to stdout from multiple clients using named pipes in to ffmpeg, spit the ffmpeg out to be downloaded

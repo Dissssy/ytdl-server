@@ -59,26 +59,50 @@ impl Config {
         // ensure the folder exists
         let mut file =
             std::fs::File::open(&path).unwrap_or_else(|_| std::fs::File::create(&path).unwrap());
+        let mut write = false;
         let maybe_config: MaybeConfig = serde_json::from_reader(&mut file).unwrap_or_default();
         let config = Config {
-            host: maybe_config.host.unwrap_or_else(|| safe_get("Host")),
-            port: maybe_config.port.unwrap_or_else(|| safe_get("Port")),
+            host: maybe_config.host.unwrap_or_else(|| {
+                write = true;
+                safe_get("Host")
+            }),
+            port: maybe_config.port.unwrap_or_else(|| {
+                write = true;
+                safe_get("Port")
+            }),
             auth_keys: maybe_config.auth_keys.unwrap_or_default(),
-            expire_time: maybe_config.expire_time.unwrap_or_else(|| safe_get("Join handle expire time (seconds)")),
+            expire_time: maybe_config.expire_time.unwrap_or_else(|| {
+                write = true;
+                safe_get("Join handle expire time (seconds)")
+            }),
             video_dir: maybe_config
                 .video_dir
-                .unwrap_or_else(|| safe_get_dir("Video directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")),
+                .unwrap_or_else(|| {
+                    write = true;
+                    safe_get_dir("Video directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")
+                }),
             audio_dir: maybe_config
                 .audio_dir
-                .unwrap_or_else(|| safe_get_dir("Audio directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")),
-            tmp_dir: maybe_config.tmp_dir.unwrap_or_else(|| safe_get_dir("Temporary directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")),
-            max_file_size: maybe_config.max_file_size.unwrap_or_else(|| safe_get("Max file size")),
+                .unwrap_or_else(|| {
+                    write = true;
+                    safe_get_dir("Audio directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")
+                }),
+            tmp_dir: maybe_config.tmp_dir.unwrap_or_else(|| {
+                write = true;
+                safe_get_dir("Temporary directory (absolute path) DIRECTORIES WILL BE CREATED IF THEY DO NOT EXIST")
+            }),
+            max_file_size: maybe_config.max_file_size.unwrap_or_else(|| {
+                write = true;
+                safe_get("Max file size")
+            }),
         };
         validate_dir(&config.video_dir).unwrap();
         validate_dir(&config.audio_dir).unwrap();
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(serde_json::to_string_pretty(&config).unwrap().as_bytes())
-            .unwrap();
+        if write {
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(serde_json::to_string_pretty(&config).unwrap().as_bytes())
+                .unwrap();
+        }
         config
     }
     pub fn get_video_dir(&self) -> PathBuf {
