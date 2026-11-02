@@ -1,9 +1,7 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release \
+RUN cargo build --release \
  && cp target/release/ytdl-server /ytdl-server
 
 FROM python:3.12-slim
