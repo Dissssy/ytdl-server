@@ -1,0 +1,18 @@
+services:
+  ytdl-server:
+    build: .
+    container_name: ytdl-server
+    restart: unless-stopped
+    environment:
+      TZ: America/New_York
+    # Caddy (ytdlp.deadlyneurotox.in) proxies here and serves the static pages itself.
+    ports:
+      - 127.0.0.1:12221:12221
+    volumes:
+      # config.json (host, port, dirs, auth keys); the server watches it for changes.
+      - /root/.config/ytdl-rs:/root/.config/ytdl-rs
+      - /root/cookies.txt:/root/cookies.txt:ro
+      # video_dir and audio_dir from config.json, at the same paths.
+      - /mnt/Plex/YTDL:/mnt/Plex/YTDL
+    # tmp_dir (/tmp/ytdlp-server) stays inside the container: on the host /tmp
+    # is a tmpfs, so downloads were sitting in RAM.

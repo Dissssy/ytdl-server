@@ -1,0 +1,6 @@
+target
+.git
+log.txt
+www
+crontab.bak
+*.conf
