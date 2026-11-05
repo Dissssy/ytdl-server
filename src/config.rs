@@ -39,6 +39,7 @@ pub struct Config {
     pub tmp_dir: String,
     pub expire_time: i64,
     pub max_file_size: u64,
+    pub cookies_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -95,6 +96,7 @@ impl Config {
                 write = true;
                 safe_get("Max file size")
             }),
+            cookies_path: std::env::var("COOKIES_PATH").ok(),
         };
         validate_dir(&config.video_dir).unwrap();
         validate_dir(&config.audio_dir).unwrap();
@@ -120,7 +122,7 @@ pub fn safe_get<T: FromStr>(prompt: &str) -> T {
     // read from terminal until user enters a valid value, then return it
     let mut input = String::new();
     loop {
-        println!("{}: ", prompt);
+        println!("{prompt}: ");
         std::io::stdin().read_line(&mut input).unwrap();
         match input.trim().parse::<T>() {
             Ok(val) => return val,
@@ -136,12 +138,12 @@ fn safe_get_dir(prompt: &str) -> String {
     // read from terminal until user enters a valid directory, then return it
     let mut input = String::new();
     loop {
-        println!("{}: ", prompt);
+        println!("{prompt}: ");
         std::io::stdin().read_line(&mut input).unwrap();
         match validate_dir(input.trim()) {
             Ok(_) => return input.trim().to_string(),
             Err(e) => {
-                println!("{}", e);
+                println!("{e}");
                 input.clear();
             }
         }
