@@ -3,19 +3,53 @@
   "name": "Media Downloader",
   "version": "1.1.0",
   "description": "Right-click to download videos and audio through your Media Downloader server.",
-  "icons": { "48": "icon.svg", "96": "icon.svg" },
-  "browser_specific_settings": {
-    "gecko": { "id": "media-downloader@deadlyneurotox.in", "strict_min_version": "115.0" }
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
   },
-  "permissions": ["menus", "storage", "notifications", "downloads", "tabs", "<all_urls>"],
-  "background": { "scripts": ["background.js"] },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "media-downloader@deadlyneurotox.in",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "authenticationInfo"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "menus",
+    "storage",
+    "notifications",
+    "downloads",
+    "tabs",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
   "content_scripts": [
-    { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
   ],
   "browser_action": {
     "default_icon": "icon.svg",
     "default_title": "Media Downloader",
     "default_popup": "popup.html"
   },
-  "options_ui": { "page": "options.html", "open_in_tab": false }
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  }
 }
