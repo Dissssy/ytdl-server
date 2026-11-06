@@ -447,7 +447,7 @@ window.addEventListener('message', async (e) => {
     if (r.ok) {
       me.cookies = r.cookies;
       cookieStatus();
-      cookieMsg(`Uploaded ${r.entries} cookies from Firefox.`);
+      cookieMsg(`Uploaded ${r.entries} cookies from Firefox (${r.total} stored).`);
     } else cookieMsg([r.message, r.detail].filter(Boolean).join(' ') || 'Upload failed.', true);
     return;
   }
@@ -475,7 +475,7 @@ $('cookies-upload').addEventListener('click', async () => {
     const r = await api('/api/cookies', { method: 'POST', body: await file.text(), headers: { 'Content-Type': 'text/plain' } });
     me.cookies = r.cookies;
     cookieStatus();
-    cookieMsg(`Uploaded ${r.entries} cookies.`);
+    cookieMsg(`Uploaded ${r.entries} cookies (${r.total} stored).`);
   } catch (err) { cookieMsg(err.detail ? `${err.message} ${err.detail}` : err.message, true); }
 });
 $('cookies-remove').addEventListener('click', async () => {

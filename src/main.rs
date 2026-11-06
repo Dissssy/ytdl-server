@@ -209,6 +209,21 @@ fn cookies_uploaded(user: &str) -> Option<u64> {
     modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
+/// The cookie lines of a cookies.txt, each keyed by (domain, path, name).
+fn cookie_rows(text: &str) -> Vec<((String, String, String), String)> {
+    text.lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .filter_map(|line| {
+            let bare = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+            if bare.starts_with('#') {
+                return None;
+            }
+            let f: Vec<&str> = bare.split('\t').collect();
+            (f.len() == 7).then(|| ((f[0].to_ascii_lowercase(), f[2].to_string(), f[5].to_string()), line.to_string()))
+        })
+        .collect()
+}
+
 /// Stores the user's own cookies.txt (Netscape format), used for their downloads only.
 #[post("/api/cookies")]
 async fn api_cookies_put(req: HttpRequest, body: Bytes, jobs: Data<Jobs>) -> HttpResponse {
@@ -219,20 +234,28 @@ async fn api_cookies_put(req: HttpRequest, body: Bytes, jobs: Data<Jobs>) -> Htt
     let Ok(text) = std::str::from_utf8(&body) else {
         return bad("That isn't a cookies.txt file.", "not text");
     };
-    let rows = text.lines().filter(|l| {
-        let l = l.strip_prefix("#HttpOnly_").unwrap_or(l);
-        !l.starts_with('#') && l.split('\t').count() == 7
-    });
-    let count = rows.count();
-    if count == 0 {
+    let uploaded = cookie_rows(text);
+    if uploaded.is_empty() {
         return bad(
             "That isn't a cookies.txt file.",
             "Expected Netscape-format lines with 7 tab-separated fields. Export with a cookies.txt browser extension.",
         );
     }
-    let mut text = text.replace("\r\n", "\n");
-    if !text.starts_with("# Netscape HTTP Cookie File") && !text.starts_with("# HTTP Cookie File") {
-        text = format!("# Netscape HTTP Cookie File\n{text}");
+    let count = uploaded.len();
+    // Upsert into what's already stored, keyed by domain, path and name; Remove starts fresh.
+    let path = config::user_cookies(&user.user);
+    let mut merged = std::fs::read_to_string(&path).map(|t| cookie_rows(&t)).unwrap_or_default();
+    for (key, line) in uploaded {
+        match merged.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = line,
+            None => merged.push((key, line)),
+        }
+    }
+    let total = merged.len();
+    let mut text = String::from("# Netscape HTTP Cookie File\n");
+    for (_, line) in &merged {
+        text.push_str(line);
+        text.push('\n');
     }
     let path = config::user_cookies(&user.user);
     let write = || -> std::io::Result<()> {
@@ -247,8 +270,8 @@ async fn api_cookies_put(req: HttpRequest, body: Bytes, jobs: Data<Jobs>) -> Htt
         return HttpResponse::InternalServerError().json(serde_json::json!({ "message": "Couldn't save the cookies.", "detail": e.to_string() }));
     }
     jobs.forget_probes(&user.user);
-    println!("{} uploaded cookies ({count} entries)", user.user);
-    HttpResponse::Ok().json(serde_json::json!({ "cookies": cookies_uploaded(&user.user), "entries": count }))
+    println!("{} uploaded {count} cookies ({total} stored)", user.user);
+    HttpResponse::Ok().json(serde_json::json!({ "cookies": cookies_uploaded(&user.user), "entries": count, "total": total }))
 }
 
 #[delete("/api/cookies")]

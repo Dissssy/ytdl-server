@@ -51,7 +51,7 @@ $('cookies-upload').onclick = async () => {
   if (!file) { $('cookies-msg').textContent = 'Choose your cookies.txt file first.'; return; }
   try {
     const r = await cookieApi('POST', await file.text());
-    $('cookies-msg').textContent = `Uploaded ${r.entries} cookies.`;
+    $('cookies-msg').textContent = `Uploaded ${r.entries} cookies (${r.total} stored).`;
     $('cookies-file').value = '';
   } catch (e) { $('cookies-msg').textContent = e.message; }
   cookieStatus();
@@ -60,7 +60,7 @@ $('cookies-firefox').onclick = async () => {
   $('cookies-msg').textContent = 'Uploading…';
   const domains = $('cookie-domains').value.split(/[\s,]+/);
   const r = await browser.runtime.sendMessage({ type: 'upload-cookies', domains });
-  $('cookies-msg').textContent = r.ok ? `Uploaded ${r.entries} cookies from Firefox.` : [r.message, r.detail].filter(Boolean).join(' ');
+  $('cookies-msg').textContent = r.ok ? `Uploaded ${r.entries} cookies from Firefox (${r.total} stored).` : [r.message, r.detail].filter(Boolean).join(' ');
   cookieStatus();
 };
 $('cookies-remove').onclick = async () => {
