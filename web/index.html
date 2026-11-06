@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media Downloader</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 3v12m0 0l-5-5m5 5l5-5M4 20h16' stroke='%236d5dfc' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+  <header class="top">
+    <h1>Media Downloader</h1>
+    <button id="who" class="who" hidden title="Settings"></button>
+  </header>
+
+  <main>
+    <!-- Shown until a key is stored -->
+    <section id="signin" class="card" hidden>
+      <h2>Sign in</h2>
+      <p class="muted">Open your invite link, or paste it (or the key) here.</p>
+      <form id="signin-form" class="row">
+        <input id="signin-key" type="password" placeholder="Invite link or key" autocomplete="off" required>
+        <button class="primary">Sign in</button>
+      </form>
+      <p id="signin-error" class="error" hidden></p>
+    </section>
+
+    <section id="app" hidden>
+      <form id="url-form" class="card">
+        <div class="url-row">
+          <input id="url" type="url" inputmode="url" placeholder="Paste a link" autocomplete="off" spellcheck="false">
+          <button type="button" id="paste" class="ghost" title="Paste from clipboard">Paste</button>
+        </div>
+
+        <div id="probe-error" class="error" hidden></div>
+
+        <div id="preview" class="preview" hidden>
+          <div class="thumb"><img id="thumb" alt=""></div>
+          <div class="meta">
+            <div id="title" class="title"></div>
+            <div id="sub" class="muted"></div>
+          </div>
+        </div>
+        <div id="skeleton" class="preview skeleton" hidden>
+          <div class="thumb"></div>
+          <div class="meta"><div class="bar w80"></div><div class="bar w40"></div></div>
+        </div>
+
+        <div id="options" hidden>
+          <div class="presets" role="radiogroup" aria-label="Preset">
+            <button type="button" data-preset="share" role="radio">Share<small>25 MB</small></button>
+            <button type="button" data-preset="discord" role="radio">Discord<small>10 MB</small></button>
+            <button type="button" data-preset="best" role="radio">Best<small>original</small></button>
+            <button type="button" data-preset="audio" role="radio">Audio<small>MP3</small></button>
+          </div>
+
+          <div id="size-block" class="size-block">
+            <div class="size-head">
+              <label for="size">Max size</label>
+              <output id="size-out"></output>
+            </div>
+            <input id="size" type="range" min="0" max="1000" step="1">
+          </div>
+
+          <div class="pick" aria-live="polite">
+            <div id="pick-label" class="pick-label"></div>
+            <div id="pick-meta" class="muted"></div>
+          </div>
+
+          <details id="advanced">
+            <summary>Advanced</summary>
+            <div class="adv">
+              <label>Format
+                <select id="format"></select>
+              </label>
+              <label class="check"><input type="checkbox" id="original"> Keep original codecs (may not play inline everywhere)</label>
+              <label class="check" id="nas-row" hidden><input type="checkbox" id="nas"> Save to the NAS instead of this device</label>
+            </div>
+          </details>
+
+          <button id="go" class="primary big">Download</button>
+        </div>
+      </form>
+
+      <section class="jobs-wrap">
+        <div class="jobs-head">
+          <h2>Downloads</h2>
+          <span id="live" class="live" title="Live updates"></span>
+        </div>
+        <ul id="jobs" class="jobs"></ul>
+        <p id="empty" class="muted empty">Nothing yet. Paste a link above.</p>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <p id="settings-who"></p>
+      <label>Key<input id="settings-key" type="password" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="autosave"> Save files automatically when they're ready</label>
+      <div class="row end">
+        <button value="forget" class="ghost danger">Sign out</button>
+        <button value="cancel" class="ghost">Close</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="job-tpl">
+    <li class="job">
+      <div class="thumb sm"><img alt=""></div>
+      <div class="job-main">
+        <div class="job-top">
+          <span class="job-title"></span>
+          <span class="badge"></span>
+        </div>
+        <div class="job-sub muted"></div>
+        <div class="progress"><div></div></div>
+        <div class="job-err" hidden>
+          <span class="msg"></span>
+          <details><summary>Details</summary><code></code></details>
+        </div>
+      </div>
+      <div class="job-actions">
+        <a class="primary save" hidden>Save</a>
+        <button class="ghost retry" hidden>Retry</button>
+        <button class="ghost x" title="Cancel or remove" aria-label="Cancel or remove">✕</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

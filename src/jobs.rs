@@ -203,12 +203,15 @@ impl Jobs {
             Plan::Legacy { audio, .. } => *audio,
             Plan::Pick { mode, .. } => *mode == Mode::Audio,
         };
+        // A recent probe of the same URL gives the list a title and picture right away.
+        let known = self.probes.lock().unwrap().get(&url).map(|(_, i)| (i.title.clone(), i.thumbnail.clone()));
+        let (title, thumbnail) = known.map_or((None, None), |(t, th)| (Some(t), th));
         let view = View {
             id: id.clone(),
             owner: owner.to_string(),
             url,
-            title: None,
-            thumbnail: None,
+            title,
+            thumbnail,
             target,
             audio,
             choice: None,

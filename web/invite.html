@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Signing in…</title>
+  <script>
+    // Stores the invite key, then returns to the main page. The browser extension reads it from here too.
+    const key = new URLSearchParams(location.search).get('key');
+    if (key) localStorage.setItem('api_key', key);
+    location.replace('/');
+  </script>
+</head>
+<body><noscript>Please enable JavaScript to use this page.</noscript></body>
+</html>
