@@ -1,11 +1,12 @@
 'use strict';
-// Starts downloads on the server, follows them over server-sent events, and saves
+// Starts downloads on the server, follows them by polling while any are active, and saves
 // finished files through Firefox's download manager (or leaves them on the NAS).
 
 const DEFAULTS = { server: 'https://ytdlp.deadlyneurotox.in', key: '', videoMode: 'compat', videoCap: 0, notify: true };
 let settings = { ...DEFAULTS };
 let me = null;                 // { user, nas } from /api/me
-let events = null;
+let pollTimer = null;
+const ACTIVE = ['queued', 'fetching', 'processing'];
 const tracked = new Map();     // job id -> { tabId, closeTab }
 const jobs = new Map();        // job id -> latest view, for the popup
 
@@ -17,7 +18,7 @@ async function load() {
     try { me = await api('/api/me'); } catch (e) { console.warn('sign-in failed', e); }
   }
   menus();
-  connect();
+  poll();
 }
 browser.storage.onChanged.addListener(load);
 
@@ -77,6 +78,7 @@ async function start(url, audio, tabId, closeTab) {
     const job = await api('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
     tracked.set(job.id, { tabId, closeTab });
     seen(job);
+    poll();
     if (closeTab && tabId != null) browser.tabs.remove(tabId).catch(() => {});
   } catch (err) {
     toast(tabId, { id: 'error-' + Date.now(), state: 'failed', title: url, error: err });
@@ -87,7 +89,10 @@ async function start(url, audio, tabId, closeTab) {
 // From the page (Gesturify functions) and the popup.
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === 'download') return start(msg.url, msg.audio, sender.tab?.id, !!msg.close);
-  if (msg.type === 'state') return Promise.resolve({ me, server: settings.server, jobs: [...jobs.values()].sort((a, b) => b.created - a.created) });
+  if (msg.type === 'state') {
+    poll();
+    return Promise.resolve({ me, server: settings.server, jobs: [...jobs.values()].sort((a, b) => b.created - a.created) });
+  }
   if (msg.type === 'cancel') return api(`/api/jobs/${msg.id}`, { method: 'DELETE' }).catch(() => {});
   if (msg.type === 'save') return save(msg.id);
   // The site's own page shares its stored key, so visiting it once signs the extension in.
@@ -97,23 +102,29 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 });
 
 // ---------- following jobs ----------
-function connect() {
-  events?.close();
-  events = null;
+// Polling (rather than an EventSource) is dependable from an extension background page,
+// and it only runs while something is in progress.
+async function poll() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
   if (!me) return;
-  events = new EventSource(`${settings.server}/api/events?key=${encodeURIComponent(settings.key)}`);
-  events.addEventListener('snapshot', (e) => {
-    jobs.clear();
-    for (const j of JSON.parse(e.data)) jobs.set(j.id, j);
-    badge();
-  });
-  events.addEventListener('job', (e) => seen(JSON.parse(e.data)));
+  try {
+    const list = await api('/api/jobs');
+    const ids = new Set(list.map((j) => j.id));
+    for (const [id, j] of jobs) if (!ids.has(id)) seen({ ...j, state: 'expired' });
+    for (const j of list) seen(j);
+  } catch (e) {
+    console.warn('poll failed', e);
+  }
+  const busy = tracked.size > 0 || [...jobs.values()].some((j) => ACTIVE.includes(j.state));
+  if (busy) pollTimer = setTimeout(poll, 1500);
 }
 
 function seen(job) {
   const prev = jobs.get(job.id);
   if (job.state === 'expired') jobs.delete(job.id); else jobs.set(job.id, job);
   badge();
+  if (JSON.stringify(prev) === JSON.stringify(job)) return;
   browser.runtime.sendMessage({ type: 'job', job }).catch(() => {}); // popup, if open
   const t = tracked.get(job.id);
   if (!t) return;
@@ -144,7 +155,7 @@ async function save(id) {
 }
 
 function badge() {
-  const active = [...jobs.values()].filter((j) => ['queued', 'fetching', 'processing'].includes(j.state)).length;
+  const active = [...jobs.values()].filter((j) => ACTIVE.includes(j.state)).length;
   browser.browserAction.setBadgeText({ text: active ? String(active) : '' });
   browser.browserAction.setBadgeBackgroundColor({ color: '#6d5dfc' });
 }
