@@ -111,11 +111,14 @@
           </select>
         </label>
         <label class="check"><input type="checkbox" id="ext-notify"> Notify when a download finishes or fails</label>
+        <label>Upload my cookies from Firefox for
+          <div class="row"><input id="ext-domains" type="text" value="youtube.com"><button type="button" id="ext-cookies" class="ghost">Upload</button></div>
+        </label>
       </div>
       <div class="cookies" id="cookies-section">
         <h3>Your cookies</h3>
         <p id="cookies-status" class="muted"></p>
-        <p class="muted small">Some videos need a signed-in account. Export a <code>cookies.txt</code> from your browser while signed in (for example with the "Get cookies.txt LOCALLY" extension) and upload it. Only your downloads use it.</p>
+        <p class="muted small">Some videos need a signed-in account. With the Firefox extension, use the Upload button above. Otherwise, export a <code>cookies.txt</code> from your browser while signed in (for example with the "Get cookies.txt LOCALLY" extension) and upload it. Only your downloads use it.</p>
         <div class="row">
           <input id="cookies-file" type="file" accept=".txt,text/plain">
           <button type="button" id="cookies-upload" class="ghost">Upload</button>

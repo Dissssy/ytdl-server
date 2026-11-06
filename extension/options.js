@@ -56,6 +56,13 @@ $('cookies-upload').onclick = async () => {
   } catch (e) { $('cookies-msg').textContent = e.message; }
   cookieStatus();
 };
+$('cookies-firefox').onclick = async () => {
+  $('cookies-msg').textContent = 'Uploading…';
+  const domains = $('cookie-domains').value.split(/[\s,]+/);
+  const r = await browser.runtime.sendMessage({ type: 'upload-cookies', domains });
+  $('cookies-msg').textContent = r.ok ? `Uploaded ${r.entries} cookies from Firefox.` : [r.message, r.detail].filter(Boolean).join(' ');
+  cookieStatus();
+};
 $('cookies-remove').onclick = async () => {
   try { await cookieApi('DELETE'); $('cookies-msg').textContent = 'Removed.'; } catch (e) { $('cookies-msg').textContent = e.message; }
   cookieStatus();

@@ -436,8 +436,22 @@ function extSettings(type, settings) {
   if (document.documentElement.dataset.mdExtension !== '1') return;
   window.postMessage({ source: 'md-page', type, settings }, location.origin);
 }
-window.addEventListener('message', (e) => {
-  if (e.source !== window || e.data?.source !== 'md-extension' || e.data.type !== 'settings' || !e.data.settings) return;
+$('ext-cookies').addEventListener('click', () => {
+  cookieMsg('Uploading from Firefox…');
+  window.postMessage({ source: 'md-page', type: 'upload-cookies', domains: $('ext-domains').value.split(/[\s,]+/) }, location.origin);
+});
+window.addEventListener('message', async (e) => {
+  if (e.source !== window || e.data?.source !== 'md-extension') return;
+  if (e.data.type === 'cookies-uploaded') {
+    const r = e.data.result || {};
+    if (r.ok) {
+      me.cookies = r.cookies;
+      cookieStatus();
+      cookieMsg(`Uploaded ${r.entries} cookies from Firefox.`);
+    } else cookieMsg([r.message, r.detail].filter(Boolean).join(' ') || 'Upload failed.', true);
+    return;
+  }
+  if (e.data.type !== 'settings' || !e.data.settings) return;
   extState = e.data.settings;
   $('ext-settings').hidden = false;
   $('ext-preset').value = `${extState.videoMode}:${extState.videoCap}`;

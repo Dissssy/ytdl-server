@@ -27,6 +27,11 @@ if (document.querySelector('script[src="app.js"]')) {
   window.addEventListener('message', async (e) => {
     if (e.source !== window || e.data?.source !== 'md-page') return;
     if (e.data.type === 'signed-in') return syncKey();
+    if (e.data.type === 'upload-cookies') {
+      const result = await browser.runtime.sendMessage({ type: 'upload-cookies', domains: e.data.domains });
+      window.postMessage({ source: 'md-extension', type: 'cookies-uploaded', result }, location.origin);
+      return;
+    }
     if (e.data.type === 'get-settings' || e.data.type === 'set-settings') {
       const settings = await browser.runtime.sendMessage({ type: e.data.type, settings: e.data.settings });
       window.postMessage({ source: 'md-extension', type: 'settings', settings: settings || null }, location.origin);

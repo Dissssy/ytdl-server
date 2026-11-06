@@ -25,7 +25,7 @@ browser.storage.onChanged.addListener(load);
 async function api(path, opts = {}) {
   const res = await fetch(settings.server + path, {
     ...opts,
-    headers: { Authorization: `Bearer ${settings.key}`, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Authorization: `Bearer ${settings.key}`, ...(opts.body ? { 'Content-Type': opts.body.startsWith('#') ? 'text/plain' : 'application/json' } : {}) },
   });
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = { message: text || res.statusText }; }
@@ -101,6 +101,10 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === 'get-settings' && fromSite) {
     return Promise.resolve({ videoMode: settings.videoMode, videoCap: settings.videoCap, notify: settings.notify, version: browser.runtime.getManifest().version });
   }
+  // Only ever sent by a button press on the options page or the site's Settings.
+  if (msg.type === 'upload-cookies' && (fromSite || sender.url?.startsWith(browser.runtime.getURL('')))) {
+    return uploadCookies(msg.domains).then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, message: e.message || String(e), detail: e.detail || '' }));
+  }
   if (msg.type === 'set-settings' && fromSite) {
     const v = msg.settings || {};
     return browser.storage.local.set({
@@ -114,6 +118,42 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     return browser.storage.local.set({ key: msg.key });
   }
 });
+
+// ---------- cookies: exported from Firefox only when the user presses Upload ----------
+async function cookiesFor(domain) {
+  try {
+    return await browser.cookies.getAll({ domain });
+  } catch (e) {
+    // With first-party isolation on, Firefox insists on the firstPartyDomain field.
+    if (String(e).includes('firstPartyDomain')) return browser.cookies.getAll({ domain, firstPartyDomain: null });
+    throw e;
+  }
+}
+async function uploadCookies(domains) {
+  const list = (domains || []).map((d) => String(d).trim().replace(/^\.+/, '')).filter(Boolean);
+  if (!list.length) throw { message: 'Name at least one site, like youtube.com.' };
+  const seen = new Set();
+  const lines = ['# Netscape HTTP Cookie File'];
+  for (const d of list) {
+    for (const c of await cookiesFor(d)) {
+      const id = `${c.domain}\t${c.path}\t${c.name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const domain = c.hostOnly ? c.domain : (c.domain.startsWith('.') ? c.domain : '.' + c.domain);
+      lines.push([
+        (c.httpOnly ? '#HttpOnly_' : '') + domain,
+        c.hostOnly ? 'FALSE' : 'TRUE',
+        c.path,
+        c.secure ? 'TRUE' : 'FALSE',
+        c.expirationDate ? Math.floor(c.expirationDate) : 0,
+        c.name,
+        c.value,
+      ].join('\t'));
+    }
+  }
+  if (lines.length === 1) throw { message: `No cookies found for ${list.join(', ')}. Sign in to the site in this browser first.` };
+  return api('/api/cookies', { method: 'POST', body: lines.join('\n') + '\n' });
+}
 
 // ---------- following jobs ----------
 // Polling (rather than an EventSource) is dependable from an extension background page,
