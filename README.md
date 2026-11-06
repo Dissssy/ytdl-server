@@ -33,8 +33,8 @@ Users (run inside the container, `docker exec -it ytdl-server ytdl-server ...`):
 
 Each user can upload their own `cookies.txt` in Settings (or the extension's
 options). It's stored as `cookies/<user>.txt` next to config.json, mode 600, and
-used only for that user's downloads. Users without one fall back to the shared
-file at `COOKIES_PATH`. Sign-in errors tell the user to upload theirs.
+used only for that user's downloads; there is no shared cookies file. Sign-in
+errors tell the user to upload theirs.
 
 ## API
 

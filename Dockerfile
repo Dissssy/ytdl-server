@@ -18,6 +18,5 @@ COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=build /src/target/release/ytdl-server /usr/local/bin/ytdl-server
 COPY web /app/web
 ENV PATH=/opt/ytdlp/bin:$PATH \
-    COOKIES_PATH=/root/cookies.txt \
     WEB_DIR=/app/web
 CMD ["ytdl-server"]

@@ -42,7 +42,7 @@ async function cookieStatus() {
     const me = await cookieApi('GET');
     $('cookies-status').textContent = me.cookies
       ? `Using your cookies, uploaded ${new Date(me.cookies * 1000).toLocaleDateString()}.`
-      : 'Not uploaded. Your downloads use the shared account.';
+      : 'Not uploaded yet. Videos that need a signed-in account will fail until you do.';
     $('cookies-remove').hidden = !me.cookies;
   } catch { $('cookies-status').textContent = 'Sign in above first.'; }
 }

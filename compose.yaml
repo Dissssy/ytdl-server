@@ -11,8 +11,6 @@ services:
     volumes:
       # config.json (host, port, dirs, users); re-read whenever it changes.
       - /root/.config/ytdl-rs:/root/.config/ytdl-rs
-      # Read-write: yt-dlp saves refreshed cookies back to the file.
-      - /mnt/VoidNeurotoxin/cookies.txt:/root/cookies.txt
       # video_dir and audio_dir from config.json, at the same paths.
       - /mnt/Plex/YTDL:/mnt/Plex/YTDL
     # tmp_dir (/tmp/ytdlp-server) stays inside the container: on the host /tmp

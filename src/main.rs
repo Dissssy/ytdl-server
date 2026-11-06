@@ -51,11 +51,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    if let Some(p) = std::env::var_os("COOKIES_PATH") {
-        if !std::path::Path::new(&p).is_file() {
-            println!("warning: COOKIES_PATH {} is not a file, so users without their own cookies get none", p.to_string_lossy());
-        }
-    }
     let store = config::Store::open(path)?;
     let config = store.get();
     let jobs = Jobs::new(store);

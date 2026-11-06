@@ -446,7 +446,7 @@ window.addEventListener('message', (e) => {
 $('who').addEventListener('click', openSettings);
 function cookieStatus() {
   const when = me.cookies ? new Date(me.cookies * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : null;
-  $('cookies-status').textContent = when ? `Using your cookies, uploaded ${when}.` : 'Not uploaded. Your downloads use the shared account.';
+  $('cookies-status').textContent = when ? `Using your cookies, uploaded ${when}.` : 'Not uploaded yet. Videos that need a signed-in account will fail until you do.';
   $('cookies-remove').hidden = !when;
 }
 function cookieMsg(text, bad) {
