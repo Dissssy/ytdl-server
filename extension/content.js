@@ -122,6 +122,7 @@ browser.runtime.onMessage.addListener((msg) => {
   if (j.state === 'fetching' && p.total) { frac = p.downloaded / p.total; sub = `${Math.floor(frac * 100)}% · ${fmt(p.downloaded)} of ${fmt(p.total)}`; }
   if (j.state === 'processing' && p.processing != null) { frac = p.processing; sub = `Converting · ${Math.floor(frac * 100)}%`; }
   if (j.state === 'failed') sub = j.error?.message || 'Failed';
+  if (j.note) sub = j.note;
   const fix = el.querySelector('.fix');
   fix.hidden = !(j.state === 'failed' && j.error?.hint === 'cookies');
   if (j.target === 'nas' && ['queued', 'fetching', 'processing'].includes(j.state)) sub = 'NAS · ' + sub;

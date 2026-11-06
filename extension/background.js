@@ -45,6 +45,8 @@ function menus() {
   browser.menus.create({ id: 'video', title: `Download video${where}`, contexts });
   browser.menus.create({ id: 'audio', title: `Download audio${where}`, contexts });
   browser.menus.create({ id: 'pick', title: 'Choose quality…', contexts });
+  browser.menus.create({ id: 'sep', type: 'separator', contexts: ['page'] });
+  browser.menus.create({ id: 'cookies', title: 'Upload cookies for this site', contexts: ['page'] });
 }
 
 function targetUrl(info, tab) {
@@ -56,6 +58,7 @@ function targetUrl(info, tab) {
 
 browser.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'setup') return browser.runtime.openOptionsPage();
+  if (info.menuItemId === 'cookies') return uploadSiteCookies(tab);
   const url = targetUrl(info, tab);
   if (info.menuItemId === 'pick') return browser.tabs.create({ url: `${settings.server}/?url=${encodeURIComponent(url)}` });
   start(url, info.menuItemId === 'audio', tab?.id, false);
@@ -153,6 +156,31 @@ async function uploadCookies(domains) {
   }
   if (lines.length === 1) throw { message: `No cookies found for ${list.join(', ')}. Sign in to the site in this browser first.` };
   return api('/api/cookies', { method: 'POST', body: lines.join('\n') + '\n' });
+}
+
+// The site's registrable domain, so www.youtube.com covers .youtube.com cookies too.
+function siteDomain(url) {
+  const labels = new URL(url).hostname.split('.');
+  const n = labels.length > 2 && labels.at(-1).length === 2 && labels.at(-2).length <= 3 ? 3 : 2; // e.g. bbc.co.uk
+  return labels.slice(-n).join('.');
+}
+
+// Context menu: upload this site's cookies, reporting in the page's toast.
+async function uploadSiteCookies(tab) {
+  let domain = '';
+  try { domain = siteDomain(tab.url); } catch {}
+  const id = 'cookies-' + Date.now();
+  const title = `Cookies for ${domain || 'this site'}`;
+  if (!domain || !/^https?:/.test(tab.url)) {
+    return toast(tab.id, { id, title, state: 'failed', error: { message: "This page isn't a website." } });
+  }
+  toast(tab.id, { id, title, state: 'fetching', note: 'Uploading…' });
+  try {
+    const r = await uploadCookies([domain]);
+    toast(tab.id, { id, title, state: 'saved', note: `Uploaded ${r.entries} cookies (${r.total} stored)` });
+  } catch (e) {
+    toast(tab.id, { id, title, state: 'failed', error: { message: e.message || String(e) } });
+  }
 }
 
 // ---------- following jobs ----------
