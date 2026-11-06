@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; padding: 8px 4px; max-width: 520px; }
+    label { display: grid; gap: 4px; margin-bottom: 12px; }
+    label.check { display: flex; gap: 8px; align-items: center; }
+    input[type=text], input[type=password], select { padding: 6px 8px; font: inherit; }
+    .muted { color: #6b6b78; }
+    #status { margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <p class="muted">The easiest setup is to open your invite link: the extension picks up the key from the site. Or paste it here.</p>
+  <label>Server<input id="server" type="text"></label>
+  <label>Key or invite link<input id="key" type="password" autocomplete="off"></label>
+  <label>Right-click "Download video" uses
+    <select id="preset">
+      <option value="compat:0">Best quality that plays everywhere (H.264 MP4)</option>
+      <option value="compat:25">Share: H.264 MP4 under 25 MB</option>
+      <option value="compat:10">Discord: H.264 MP4 under 10 MB</option>
+      <option value="best:0">Original quality and codecs</option>
+    </select>
+  </label>
+  <label class="check"><input id="notify" type="checkbox"> Show a notification when a download finishes or fails</label>
+  <button id="save">Save</button><span id="status" class="muted"></span>
+  <script src="options.js"></script>
+</body>
+</html>

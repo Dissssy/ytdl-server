@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="signed-out" hidden>
+    <p>Not signed in.</p>
+    <button id="open-options" class="primary">Set up</button>
+  </div>
+  <div id="signed-in" hidden>
+    <div class="row">
+      <button id="dl-video" class="primary">Download this page</button>
+      <button id="dl-audio">Audio</button>
+    </div>
+    <div class="row small">
+      <span id="who" class="muted"></span>
+      <a id="open-site" href="#">Choose quality…</a>
+    </div>
+    <ul id="jobs"></ul>
+    <p id="empty" class="muted">No downloads yet.</p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

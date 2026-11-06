@@ -118,7 +118,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; mar
 .check { display: flex !important; gap: 8px; align-items: center; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
 
-.jobs-wrap { margin-bottom: 40px; }
+.jobs-wrap { margin-bottom: 24px; }
+.foot { text-align: center; font-size: 13px; margin-bottom: 40px; }
+.foot a { color: var(--accent); }
 .jobs-head { display: flex; align-items: center; gap: 8px; }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-bottom: 8px; }
 .live.on { background: var(--ok); }

@@ -407,6 +407,11 @@ $('settings').addEventListener('close', async () => {
 });
 
 // ---------- start ----------
+// The extension link shows once a signed build has been dropped into web/.
+if (navigator.userAgent.includes('Firefox')) {
+  fetch('media-downloader.xpi', { method: 'HEAD' }).then((r) => { $('ext').hidden = !r.ok || !(r.headers.get('content-type') || '').includes('xpinstall'); }).catch(() => {});
+}
+
 // Links like /?url=... (from the extension or a bookmarklet) prefill the box.
 const startUrl = new URLSearchParams(location.search).get('url');
 if (key) {
