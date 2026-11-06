@@ -32,7 +32,7 @@ impl std::fmt::Display for Failure {
     }
 }
 
-const SIGN_IN: &[&str] = &["sign in to confirm", "confirm your age", "age-restricted", "login required", "log in", "you need to log in", "cookies", "private account"];
+const SIGN_IN: &[&str] = &["sign in to confirm", "confirm your age", "age-restricted", "login required", "log in", "you need to log in", "use --cookies", "private account"];
 
 const RULES: &[(&[&str], &str)] = &[
     (&["private video", "video unavailable", "has been removed", "no longer available", "does not exist", "http error 404", "account has been terminated"],
@@ -65,7 +65,7 @@ pub fn explain<'a>(lines: impl IntoIterator<Item = &'a str>, user: &str) -> Fail
         .unwrap_or_default();
     let lower = detail.to_lowercase();
     if SIGN_IN.iter().any(|n| lower.contains(n)) && !lower.contains("private video") {
-        let message = if crate::config::user_cookies(user).exists() {
+        let message = if crate::config::user_cookies(user).is_file() {
             "This needs a signed-in account, and your cookies didn't work. They may have expired: export and upload them again in Settings."
         } else {
             "This needs a signed-in account. Upload your own cookies.txt in Settings to use yours."
@@ -96,6 +96,12 @@ mod tests {
         let f = explain(["ERROR: [youtube] x: Private video. Sign in if you've been granted access to this video"], "nobody-here");
         assert_eq!(f.hint, None);
         assert_eq!(f.message, "This video is private or was removed.");
+    }
+
+    #[test]
+    fn a_cookies_path_is_not_a_sign_in_problem() {
+        let f = explain(["ERROR: [Errno 21] Is a directory: '/root/cookies.txt'"], "nobody-here");
+        assert_eq!(f.hint, None);
     }
 
     #[test]

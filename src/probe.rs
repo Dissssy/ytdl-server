@@ -96,10 +96,11 @@ impl RawFmt {
 /// The user's own cookies.txt if they uploaded one, else the shared one from COOKIES_PATH.
 pub fn cookies_for(user: &str) -> Option<std::path::PathBuf> {
     let own = crate::config::user_cookies(user);
-    if own.exists() {
+    if own.is_file() {
         return Some(own);
     }
-    std::env::var_os("COOKIES_PATH").map(std::path::PathBuf::from).filter(|p| p.exists())
+    // is_file, not exists: Docker creates a directory when a bind-mounted file is missing.
+    std::env::var_os("COOKIES_PATH").map(std::path::PathBuf::from).filter(|p| p.is_file())
 }
 
 pub fn base_args(user: &str) -> Vec<String> {
