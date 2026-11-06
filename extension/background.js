@@ -94,6 +94,22 @@ async function start(url, audio, tabId, closeTab, target = 'browser') {
   }
 }
 
+// From other add-ons, such as Gesturefy's "Send message to other add-on" command. Sites like
+// YouTube block Gesturefy's user scripts, so this is the dependable route. The message is
+// "video", "audio", "video-nas" or "audio-nas" (or {"action": "...", "url": "..."}) and acts
+// on the active tab. Other add-ons can only start downloads this way.
+browser.runtime.onMessageExternal.addListener(async (msg) => {
+  const action = typeof msg === 'string' ? msg : msg?.action;
+  const m = /^(video|audio)(-nas|-browser)?$/.exec(String(action || '').trim());
+  if (!m) return { ok: false, error: 'Send "video", "audio", "video-nas" or "audio-nas".' };
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const url = (typeof msg === 'object' && msg.url) || tab?.url;
+  if (!url) return { ok: false, error: 'No page to download.' };
+  const target = m[2] === '-nas' ? 'nas' : m[2] === '-browser' ? 'browser' : 'auto';
+  start(url, m[1] === 'audio', tab?.id, !!(typeof msg === 'object' && msg.close), target);
+  return { ok: true };
+});
+
 // From the page (Gesturify functions) and the popup.
 browser.runtime.onMessage.addListener((msg, sender) => {
   // The popup asks for the browser; Gesturify (from a page) keeps its old NAS behaviour for NAS users.

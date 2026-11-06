@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Media Downloader",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Right-click to download videos and audio through your Media Downloader server.",
   "icons": {
     "48": "icon.svg",

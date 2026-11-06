@@ -54,6 +54,11 @@ page, link or video, a toolbar popup with progress, and the
 `dnrNAMESPACE.download_video/download_audio` functions for Gesturify. It signs
 itself in from the site when you visit it signed in.
 
+Gesturefy: YouTube's security policy blocks Gesturefy's user scripts, so use its
+"Send message to other add-on" command instead, with add-on ID
+`media-downloader@deadlyneurotox.in` and message `video-nas`, `audio-nas`,
+`video` or `audio` (plain `video`/`audio` go to the NAS for NAS users).
+
 To install it permanently it must be signed (free, not published):
 
 1. Zip the folder's contents: `cd extension && zip -r ../media-downloader.zip .`
