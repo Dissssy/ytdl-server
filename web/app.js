@@ -501,7 +501,7 @@ $('settings').addEventListener('close', async () => {
 // ---------- start ----------
 // The extension link shows once a signed build has been dropped into web/.
 if (navigator.userAgent.includes('Firefox')) {
-  fetch('media-downloader.xpi', { method: 'HEAD' }).then((r) => { $('ext').hidden = !r.ok || !(r.headers.get('content-type') || '').includes('xpinstall'); }).catch(() => {});
+  fetch('media-downloader.xpi', { method: 'HEAD' }).then((r) => { $('ext').hidden = !r.ok || !(r.headers.get('content-type') || '').includes('xpinstall') || +(r.headers.get('content-length') || 0) < 1024; }).catch(() => {});
 }
 
 // Links like /?url=... (from the extension or a bookmarklet) prefill the box.
