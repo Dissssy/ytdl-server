@@ -62,6 +62,8 @@ async fn main() -> anyhow::Result<()> {
     actix_web::HttpServer::new(move || {
         actix_web::App::new()
             .app_data(data.clone())
+            // cookies.txt exports from a whole browser can run to a few MB.
+            .app_data(web::PayloadConfig::new(8 * 1024 * 1024))
             .app_data(web::JsonConfig::default().error_handler(|e, _| {
                 let body = serde_json::json!({ "message": "Bad request.", "detail": e.to_string() });
                 actix_web::error::InternalError::from_response(e, HttpResponse::BadRequest().json(body)).into()
@@ -78,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
             .service(api_get)
             .service(api_file)
             .service(api_delete)
+            .service(api_cookies_put)
+            .service(api_cookies_delete)
             .service(actix_files::Files::new("/", &web_dir).index_file("index.html"))
     })
     // Long downloads hold /download_now open; don't time out slow clients.
@@ -191,13 +195,72 @@ async fn legacy_download_now(req: HttpRequest, q: Query<LegacyQuery>, jobs: Data
 
 #[get("/get_info")]
 async fn legacy_get_info(req: HttpRequest, q: Query<LegacyQuery>, jobs: Data<Jobs>) -> HttpResponse {
-    if let Err(r) = user_of(&req, &jobs) {
-        return r;
+    match user_of(&req, &jobs) {
+        Ok(u) => probe_response(&jobs, &q.url, &u.user).await,
+        Err(r) => r,
     }
-    probe_response(&jobs, &q.url).await
 }
 
 // ---------- JSON API ----------
+
+/// When the user's own cookies.txt was uploaded (unix seconds), if they have one.
+fn cookies_uploaded(user: &str) -> Option<u64> {
+    let modified = std::fs::metadata(config::user_cookies(user)).and_then(|m| m.modified()).ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
+/// Stores the user's own cookies.txt (Netscape format), used for their downloads only.
+#[post("/api/cookies")]
+async fn api_cookies_put(req: HttpRequest, body: Bytes, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Ok(text) = std::str::from_utf8(&body) else {
+        return bad("That isn't a cookies.txt file.", "not text");
+    };
+    let rows = text.lines().filter(|l| {
+        let l = l.strip_prefix("#HttpOnly_").unwrap_or(l);
+        !l.starts_with('#') && l.split('\t').count() == 7
+    });
+    let count = rows.count();
+    if count == 0 {
+        return bad(
+            "That isn't a cookies.txt file.",
+            "Expected Netscape-format lines with 7 tab-separated fields. Export with a cookies.txt browser extension.",
+        );
+    }
+    let mut text = text.replace("\r\n", "\n");
+    if !text.starts_with("# Netscape HTTP Cookie File") && !text.starts_with("# HTTP Cookie File") {
+        text = format!("# Netscape HTTP Cookie File\n{text}");
+    }
+    let path = config::user_cookies(&user.user);
+    let write = || -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &text)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        return HttpResponse::InternalServerError().json(serde_json::json!({ "message": "Couldn't save the cookies.", "detail": e.to_string() }));
+    }
+    jobs.forget_probes(&user.user);
+    println!("{} uploaded cookies ({count} entries)", user.user);
+    HttpResponse::Ok().json(serde_json::json!({ "cookies": cookies_uploaded(&user.user), "entries": count }))
+}
+
+#[delete("/api/cookies")]
+async fn api_cookies_delete(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let _ = std::fs::remove_file(config::user_cookies(&user.user));
+    jobs.forget_probes(&user.user);
+    HttpResponse::NoContent().finish()
+}
 
 #[get("/api/me")]
 async fn api_me(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
@@ -206,6 +269,7 @@ async fn api_me(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
             "user": u.user,
             "nas": u.nas,
             "max_file_size": jobs.config.get().max_file_size,
+            "cookies": cookies_uploaded(&u.user),
         })),
         Err(r) => r,
     }
@@ -216,12 +280,12 @@ struct ProbeReq {
     url: String,
 }
 
-async fn probe_response(jobs: &Jobs, url: &str) -> HttpResponse {
+async fn probe_response(jobs: &Jobs, url: &str, user: &str) -> HttpResponse {
     let url = url.trim();
     if url.is_empty() {
         return bad("Paste a link first.", "");
     }
-    match jobs.probe(url).await {
+    match jobs.probe(url, user).await {
         Ok(info) => {
             let stats = jobs.stats.lock().unwrap().clone();
             HttpResponse::Ok().json(serde_json::json!({
@@ -241,10 +305,10 @@ async fn probe_response(jobs: &Jobs, url: &str) -> HttpResponse {
 
 #[post("/api/probe")]
 async fn api_probe(req: HttpRequest, body: Json<ProbeReq>, jobs: Data<Jobs>) -> HttpResponse {
-    if let Err(r) = user_of(&req, &jobs) {
-        return r;
+    match user_of(&req, &jobs) {
+        Ok(u) => probe_response(&jobs, &body.url, &u.user).await,
+        Err(r) => r,
     }
-    probe_response(&jobs, &body.url).await
 }
 
 #[derive(Deserialize)]

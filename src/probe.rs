@@ -93,20 +93,27 @@ impl RawFmt {
     }
 }
 
-pub fn base_args() -> Vec<String> {
+/// The user's own cookies.txt if they uploaded one, else the shared one from COOKIES_PATH.
+pub fn cookies_for(user: &str) -> Option<std::path::PathBuf> {
+    let own = crate::config::user_cookies(user);
+    if own.exists() {
+        return Some(own);
+    }
+    std::env::var_os("COOKIES_PATH").map(std::path::PathBuf::from).filter(|p| p.exists())
+}
+
+pub fn base_args(user: &str) -> Vec<String> {
     let mut args: Vec<String> = ["--no-playlist", "--no-colors", "--force-ipv4"].map(String::from).to_vec();
-    if let Ok(cookies) = std::env::var("COOKIES_PATH") {
-        if std::path::Path::new(&cookies).exists() {
-            args.push("--cookies".into());
-            args.push(cookies);
-        }
+    if let Some(cookies) = cookies_for(user) {
+        args.push("--cookies".into());
+        args.push(cookies.display().to_string());
     }
     args
 }
 
-pub async fn probe(url: &str) -> Result<Info, crate::errors::Failure> {
+pub async fn probe(url: &str, user: &str) -> Result<Info, crate::errors::Failure> {
     let out = tokio::process::Command::new("yt-dlp")
-        .args(base_args())
+        .args(base_args(user))
         .args(["--dump-single-json", "--", url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -117,7 +124,7 @@ pub async fn probe(url: &str) -> Result<Info, crate::errors::Failure> {
         .map_err(|e| crate::errors::Failure::internal(format!("couldn't run yt-dlp: {e}")))?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
-        return Err(crate::errors::explain(stderr.lines()));
+        return Err(crate::errors::explain(stderr.lines(), user));
     }
     let raw: RawInfo = serde_json::from_slice(&out.stdout)
         .map_err(|e| crate::errors::Failure::internal(format!("unexpected yt-dlp output: {e}")))?;

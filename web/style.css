@@ -150,6 +150,12 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; mar
 dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--text); width: min(440px, calc(100vw - 32px)); padding: 20px; }
 dialog::backdrop { background: #0006; }
 dialog label { display: grid; gap: 4px; margin-top: 12px; font-size: 13.5px; }
+.cookies { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.cookies h3 { font-size: 14px; margin: 0 0 4px; }
+.cookies p { margin: 4px 0; }
+.small { font-size: 12.5px; }
+.cookies input[type=file] { flex: 1; min-width: 0; font-size: 12.5px; }
+.fix-cookies { margin-top: 6px; padding: 5px 10px; font-size: 13px; }
 
 @media (max-width: 520px) {
   .thumb { width: 96px; }

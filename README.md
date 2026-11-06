@@ -29,6 +29,13 @@ Users (run inside the container, `docker exec -it ytdl-server ytdl-server ...`):
 | `--nas NAME on\|off` | Whether the user's downloads go to the NAS |
 | `-l` | List users |
 
+## Cookies
+
+Each user can upload their own `cookies.txt` in Settings (or the extension's
+options). It's stored as `cookies/<user>.txt` next to config.json, mode 600, and
+used only for that user's downloads. Users without one fall back to the shared
+file at `COOKIES_PATH`. Sign-in errors tell the user to upload theirs.
+
 ## API
 
 Legacy, kept for old scripts: `GET /download` (NAS users only, returns a job id),
@@ -37,7 +44,8 @@ Legacy, kept for old scripts: `GET /download` (NAS users only, returns a job id)
 JSON, with `Authorization: Bearer KEY` or `?key=KEY`: `GET /api/me`,
 `POST /api/probe {url}`, `POST /api/jobs {url, mode: compat|best|audio, max_size?, format?, target: browser|nas|auto}`,
 `GET /api/jobs`, `GET /api/jobs/{id}`, `DELETE /api/jobs/{id}`,
-`GET /api/jobs/{id}/file`, and `GET /api/events` (server-sent events).
+`GET /api/jobs/{id}/file`, `GET /api/events` (server-sent events),
+`POST /api/cookies` (cookies.txt as the body) and `DELETE /api/cookies`.
 
 ## Firefox extension
 

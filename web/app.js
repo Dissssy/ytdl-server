@@ -342,6 +342,7 @@ function render() {
       li = $('job-tpl').content.firstElementChild.cloneNode(true);
       li.dataset.id = j.id;
       li.querySelector('.x').addEventListener('click', () => api(`/api/jobs/${j.id}`, { method: 'DELETE' }).catch(() => {}));
+      li.querySelector('.fix-cookies').addEventListener('click', openSettings);
       li.querySelector('.retry').addEventListener('click', () => {
         $('url').value = jobs.get(j.id)?.url || ''; runProbe(); window.scrollTo({ top: 0, behavior: 'smooth' });
       });
@@ -376,6 +377,7 @@ function render() {
       err.querySelector('details').hidden = !j.error.detail;
       err.querySelector('code').textContent = j.error.detail || '';
     }
+    li.querySelector('.fix-cookies').hidden = j.error?.hint !== 'cookies';
     const save = li.querySelector('.save');
     save.hidden = !['ready', 'saved'].includes(j.state);
     save.href = fileUrl(j.id);
@@ -388,11 +390,39 @@ function render() {
 }
 
 // ---------- settings ----------
-$('who').addEventListener('click', () => {
+function openSettings() {
   $('settings-who').textContent = `Signed in as ${me.user}${me.nas ? ', with NAS access' : ''}.`;
   $('settings-key').value = key;
   $('autosave').checked = store.get('autosave', '1') === '1';
+  $('cookies-msg').hidden = true;
+  $('cookies-file').value = '';
+  cookieStatus();
   $('settings').showModal();
+}
+$('who').addEventListener('click', openSettings);
+function cookieStatus() {
+  const when = me.cookies ? new Date(me.cookies * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+  $('cookies-status').textContent = when ? `Using your cookies, uploaded ${when}.` : 'Not uploaded. Your downloads use the shared account.';
+  $('cookies-remove').hidden = !when;
+}
+function cookieMsg(text, bad) {
+  $('cookies-msg').textContent = text;
+  $('cookies-msg').className = bad ? 'small error' : 'small muted';
+  $('cookies-msg').hidden = false;
+}
+$('cookies-upload').addEventListener('click', async () => {
+  const file = $('cookies-file').files[0];
+  if (!file) return cookieMsg('Choose your cookies.txt file first.', true);
+  try {
+    const r = await api('/api/cookies', { method: 'POST', body: await file.text(), headers: { 'Content-Type': 'text/plain' } });
+    me.cookies = r.cookies;
+    cookieStatus();
+    cookieMsg(`Uploaded ${r.entries} cookies.`);
+  } catch (err) { cookieMsg(err.detail ? `${err.message} ${err.detail}` : err.message, true); }
+});
+$('cookies-remove').addEventListener('click', async () => {
+  try { await api('/api/cookies', { method: 'DELETE' }); me.cookies = null; cookieStatus(); cookieMsg('Removed.'); }
+  catch (err) { cookieMsg(err.message, true); }
 });
 $('settings').addEventListener('close', async () => {
   const v = $('settings').returnValue;

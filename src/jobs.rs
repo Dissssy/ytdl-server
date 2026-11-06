@@ -204,7 +204,7 @@ impl Jobs {
             Plan::Pick { mode, .. } => *mode == Mode::Audio,
         };
         // A recent probe of the same URL gives the list a title and picture right away.
-        let known = self.probes.lock().unwrap().get(&url).map(|(_, i)| (i.title.clone(), i.thumbnail.clone()));
+        let known = self.probes.lock().unwrap().get(&format!("{owner}\n{url}")).map(|(_, i)| (i.title.clone(), i.thumbnail.clone()));
         let (title, thumbnail) = known.map_or((None, None), |(t, th)| (Some(t), th));
         let view = View {
             id: id.clone(),
@@ -306,17 +306,25 @@ impl Jobs {
         }
     }
 
-    pub async fn probe(&self, url: &str) -> Result<Arc<Info>, Failure> {
+    /// Cached per user, since each user's cookies can change what a site shows.
+    pub async fn probe(&self, url: &str, user: &str) -> Result<Arc<Info>, Failure> {
+        let cache_key = format!("{user}\n{url}");
         {
             let mut cache = self.probes.lock().unwrap();
             cache.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(600));
-            if let Some((_, info)) = cache.get(url) {
+            if let Some((_, info)) = cache.get(&cache_key) {
                 return Ok(info.clone());
             }
         }
-        let info = Arc::new(probe::probe(url).await?);
-        self.probes.lock().unwrap().insert(url.to_string(), (Instant::now(), info.clone()));
+        let info = Arc::new(probe::probe(url, user).await?);
+        self.probes.lock().unwrap().insert(cache_key, (Instant::now(), info.clone()));
         Ok(info)
+    }
+
+    /// Drops a user's cached probes, after their cookies change.
+    pub fn forget_probes(&self, user: &str) {
+        let prefix = format!("{user}\n");
+        self.probes.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
     }
 
     async fn scheduler(self: Arc<Self>) {
@@ -395,16 +403,16 @@ impl Jobs {
     }
 
     async fn run(&self, id: &str) {
-        let Some((url, target, plan, cancel)) = ({
+        let Some((url, owner, target, plan, cancel)) = ({
             let jobs = self.jobs.lock().unwrap();
-            jobs.get(id).map(|j| (j.view.url.clone(), j.view.target, j.plan.clone(), j.cancel.clone()))
+            jobs.get(id).map(|j| (j.view.url.clone(), j.view.owner.clone(), j.view.target, j.plan.clone(), j.cancel.clone()))
         }) else {
             return;
         };
         let config = self.config.get();
         let workdir = config.tmp_dir.join(id);
         let result = tokio::select! {
-            r = self.execute(id, &url, target, &plan, &workdir, &config) => r,
+            r = self.execute(id, &url, &owner, target, &plan, &workdir, &config) => r,
             _ = cancel.notified() => Err(Failure::new("Cancelled.", "")),
         };
         match result {
@@ -422,7 +430,7 @@ impl Jobs {
         }
     }
 
-    async fn execute(&self, id: &str, url: &str, target: Target, plan: &Plan, workdir: &Path, config: &config::Config) -> Result<(), Failure> {
+    async fn execute(&self, id: &str, url: &str, owner: &str, target: Target, plan: &Plan, workdir: &Path, config: &config::Config) -> Result<(), Failure> {
         tokio::fs::create_dir_all(workdir).await.map_err(|e| Failure::internal(format!("creating {}: {e}", workdir.display())))?;
 
         // Resolve what to fetch.
@@ -437,7 +445,7 @@ impl Jobs {
                 (vec!["-S".into(), sort.into(), "--remux-video".into(), "mp4".into()], None, None)
             }
             Plan::Pick { mode, cap, format } => {
-                let info = self.probe(url).await?;
+                let info = self.probe(url, owner).await?;
                 self.update(id, |j| {
                     j.view.title = Some(info.title.clone());
                     j.view.thumbnail = info.thumbnail.clone();
@@ -480,7 +488,7 @@ impl Jobs {
             Target::Browser => "%(title).120B [%(id)s].%(ext)s".to_string(),
         };
         let mut cmd = tokio::process::Command::new("yt-dlp");
-        cmd.args(probe::base_args())
+        cmd.args(probe::base_args(owner))
             .args(["--newline", "--progress", "--windows-filenames", "--embed-metadata"])
             .args(["--max-filesize".to_string(), config.max_file_size.to_string()])
             .args(["-P".to_string(), workdir.display().to_string(), "-o".to_string(), template])
@@ -582,11 +590,11 @@ impl Jobs {
         let download_secs = started.elapsed().as_secs_f64();
         let lines = log.lock().unwrap().clone();
         if !status.success() {
-            return Err(crate::errors::explain(lines.iter().map(String::as_str)));
+            return Err(crate::errors::explain(lines.iter().map(String::as_str), owner));
         }
         let mut file = match file.filter(|f| f.exists()) {
             Some(f) => f,
-            None => return Err(crate::errors::explain(lines.iter().map(String::as_str))),
+            None => return Err(crate::errors::explain(lines.iter().map(String::as_str), owner)),
         };
         let downloaded = done_streams + last_bytes;
         if downloaded > 0 && download_secs > 0.5 {

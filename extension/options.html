@@ -9,6 +9,7 @@
     input[type=text], input[type=password], select { padding: 6px 8px; font: inherit; }
     .muted { color: #6b6b78; }
     #status { margin-left: 8px; }
+    h3 { margin: 24px 0 4px; font-size: 15px; }
   </style>
 </head>
 <body>
@@ -25,6 +26,13 @@
   </label>
   <label class="check"><input id="notify" type="checkbox"> Show a notification when a download finishes or fails</label>
   <button id="save">Save</button><span id="status" class="muted"></span>
+  <h3>Your cookies</h3>
+  <p id="cookies-status" class="muted"></p>
+  <p class="muted">Some videos need a signed-in account. Export a cookies.txt from your browser while signed in and upload it here. It's only sent when you press Upload, and only your downloads use it.</p>
+  <input id="cookies-file" type="file" accept=".txt,text/plain">
+  <button id="cookies-upload">Upload</button>
+  <button id="cookies-remove" hidden>Remove</button>
+  <p id="cookies-msg" class="muted"></p>
   <script src="options.js"></script>
 </body>
 </html>

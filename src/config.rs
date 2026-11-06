@@ -59,6 +59,12 @@ pub fn path() -> PathBuf {
         })
 }
 
+/// Where users' uploaded cookies.txt files live, next to config.json.
+pub fn user_cookies(user: &str) -> PathBuf {
+    let safe: String = user.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    path().parent().map(Path::to_path_buf).unwrap_or_default().join("cookies").join(format!("{safe}.txt"))
+}
+
 fn load(path: &Path) -> Result<Config> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let config: Config = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;

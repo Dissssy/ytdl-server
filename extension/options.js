@@ -26,4 +26,39 @@ $('save').onclick = async () => {
     $('status').textContent = e.message || "Couldn't reach the server.";
   }
 };
+// ---------- cookies: uploaded only when the button is pressed ----------
+async function cookieApi(method, body) {
+  const s = { ...DEFAULTS, ...(await browser.storage.local.get(['server', 'key'])) };
+  const res = await fetch(`${s.server}${method === 'GET' ? '/api/me' : '/api/cookies'}`, {
+    method, body, headers: { Authorization: `Bearer ${s.key}`, ...(body ? { 'Content-Type': 'text/plain' } : {}) },
+  });
+  const text = await res.text();
+  let data = null; try { data = JSON.parse(text); } catch {}
+  if (!res.ok) throw new Error([data?.message, data?.detail].filter(Boolean).join(' ') || `Server answered ${res.status}.`);
+  return data;
+}
+async function cookieStatus() {
+  try {
+    const me = await cookieApi('GET');
+    $('cookies-status').textContent = me.cookies
+      ? `Using your cookies, uploaded ${new Date(me.cookies * 1000).toLocaleDateString()}.`
+      : 'Not uploaded. Your downloads use the shared account.';
+    $('cookies-remove').hidden = !me.cookies;
+  } catch { $('cookies-status').textContent = 'Sign in above first.'; }
+}
+$('cookies-upload').onclick = async () => {
+  const file = $('cookies-file').files[0];
+  if (!file) { $('cookies-msg').textContent = 'Choose your cookies.txt file first.'; return; }
+  try {
+    const r = await cookieApi('POST', await file.text());
+    $('cookies-msg').textContent = `Uploaded ${r.entries} cookies.`;
+    $('cookies-file').value = '';
+  } catch (e) { $('cookies-msg').textContent = e.message; }
+  cookieStatus();
+};
+$('cookies-remove').onclick = async () => {
+  try { await cookieApi('DELETE'); $('cookies-msg').textContent = 'Removed.'; } catch (e) { $('cookies-msg').textContent = e.message; }
+  cookieStatus();
+};
 load();
+cookieStatus();

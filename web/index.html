@@ -100,6 +100,17 @@
       <p id="settings-who"></p>
       <label>Key<input id="settings-key" type="password" autocomplete="off"></label>
       <label class="check"><input type="checkbox" id="autosave"> Save files automatically when they're ready</label>
+      <div class="cookies">
+        <h3>Your cookies</h3>
+        <p id="cookies-status" class="muted"></p>
+        <p class="muted small">Some videos need a signed-in account. Export a <code>cookies.txt</code> from your browser while signed in (for example with the "Get cookies.txt LOCALLY" extension) and upload it. Only your downloads use it.</p>
+        <div class="row">
+          <input id="cookies-file" type="file" accept=".txt,text/plain">
+          <button type="button" id="cookies-upload" class="ghost">Upload</button>
+          <button type="button" id="cookies-remove" class="ghost danger" hidden>Remove</button>
+        </div>
+        <p id="cookies-msg" class="small" hidden></p>
+      </div>
       <div class="row end">
         <button value="forget" class="ghost danger">Sign out</button>
         <button value="cancel" class="ghost">Close</button>
@@ -121,6 +132,7 @@
         <div class="job-err" hidden>
           <span class="msg"></span>
           <details><summary>Details</summary><code></code></details>
+          <button type="button" class="ghost fix-cookies" hidden>Upload cookies</button>
         </div>
       </div>
       <div class="job-actions">

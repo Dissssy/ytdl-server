@@ -121,7 +121,12 @@ function seen(job) {
   if (prev?.state === job.state) return;
   if (job.state === 'ready') { save(job.id); tracked.delete(job.id); }
   if (job.state === 'done') { notify('Saved to NAS', job.title || job.url); tracked.delete(job.id); }
-  if (job.state === 'failed') { notify('Download failed', `${job.title || job.url}\n${job.error?.message || ''}`); tracked.delete(job.id); }
+  if (job.state === 'failed') {
+    notify('Download failed', `${job.title || job.url}\n${job.error?.message || ''}`);
+    // Point at the upload button; never upload anything on the user's behalf.
+    if (job.error?.hint === 'cookies') browser.runtime.openOptionsPage();
+    tracked.delete(job.id);
+  }
   if (job.state === 'cancelled') tracked.delete(job.id);
 }
 
