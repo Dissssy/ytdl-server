@@ -44,6 +44,34 @@ function clock(s) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
 }
 
+// Fits a title to its box: an ellipsis at rest, and a slow back-and-forth scroll when it doesn't fit.
+const marqueeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => entries.forEach((e) => measureMarquee(e.target))) : null;
+function marquee(el, text) {
+  let span = el.firstElementChild;
+  if (!span || !el.classList.contains('marquee')) {
+    span = document.createElement('span');
+    el.textContent = '';
+    el.append(span);
+    el.classList.add('marquee');
+    marqueeObserver?.observe(el);
+  }
+  if (span.textContent !== text) {
+    span.textContent = text;
+    measureMarquee(el);
+  }
+}
+function measureMarquee(el) {
+  const span = el.firstElementChild;
+  if (!span) return;
+  el.classList.remove('run');
+  const shift = Math.ceil(span.getBoundingClientRect().width - el.clientWidth);
+  if (shift > 2 && el.clientWidth > 0) {
+    el.style.setProperty('--shift', `${shift}px`);
+    el.style.setProperty('--dur', `${Math.max(4, shift / 25 + 2).toFixed(1)}s`);
+    el.classList.add('run');
+  }
+}
+
 // ---------- API ----------
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -353,7 +381,7 @@ function render() {
     const img = li.querySelector('img');
     if (j.thumbnail && img.getAttribute('src') !== j.thumbnail) img.src = j.thumbnail;
     li.querySelector('.thumb').hidden = !j.thumbnail;
-    li.querySelector('.job-title').textContent = j.title || j.url;
+    marquee(li.querySelector('.job-title'), j.title || j.url);
     li.querySelector('.job-title').title = j.url;
     const badge = li.querySelector('.badge');
     badge.className = `badge ${j.state}`;

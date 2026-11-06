@@ -4,6 +4,35 @@ const fmt = (b) => b == null ? '' : b < 1048576 ? `${Math.round(b / 1024)} KB` :
 const LABEL = { queued: 'Queued', fetching: 'Downloading', processing: 'Processing', ready: 'Ready', saved: 'Saved', done: 'On NAS', failed: 'Failed', cancelled: 'Cancelled' };
 let state = null;
 
+// Fits a title to its box: an ellipsis at rest, and a slow back-and-forth scroll when it doesn't fit.
+const marqueeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => entries.forEach((e) => measureMarquee(e.target))) : null;
+function marquee(el, text) {
+  let span = el.firstElementChild;
+  if (!span || !el.classList.contains('marquee')) {
+    span = document.createElement('span');
+    el.textContent = '';
+    el.append(span);
+    el.classList.add('marquee');
+    marqueeObserver?.observe(el);
+  }
+  if (span.textContent !== text) {
+    span.textContent = text;
+    measureMarquee(el);
+  }
+}
+function measureMarquee(el) {
+  const span = el.firstElementChild;
+  if (!span) return;
+  el.classList.remove('run');
+  const shift = Math.ceil(span.getBoundingClientRect().width - el.clientWidth);
+  if (shift > 2 && el.clientWidth > 0) {
+    el.style.setProperty('--shift', `${shift}px`);
+    el.style.setProperty('--dur', `${Math.max(4, shift / 25 + 2).toFixed(1)}s`);
+    el.classList.add('run');
+  }
+}
+
+
 async function tabUrl() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   return tab;
@@ -34,7 +63,8 @@ function render() {
   for (const j of state.jobs.slice(0, 20)) {
     const li = document.createElement('li');
     li.innerHTML = '<div class="top"><span class="title"></span><button class="x" title="Cancel or remove">✕</button></div><div class="sub"></div>';
-    li.querySelector('.title').textContent = j.title || j.url;
+    ul.append(li);
+    marquee(li.querySelector('.title'), j.title || j.url);
     li.querySelector('.title').title = j.url;
     const s = li.querySelector('.sub');
     s.textContent = sub(j);
@@ -57,7 +87,6 @@ function render() {
       b.onclick = () => browser.runtime.sendMessage({ type: 'save', id: j.id });
       li.append(b);
     }
-    ul.append(li);
   }
 }
 

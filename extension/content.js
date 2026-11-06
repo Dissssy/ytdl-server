@@ -20,6 +20,34 @@ try {
 } catch {}
 
 // ---------- toast ----------
+// Fits a title to its box: an ellipsis at rest, and a slow back-and-forth scroll when it doesn't fit.
+const marqueeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => entries.forEach((e) => measureMarquee(e.target))) : null;
+function marquee(el, text) {
+  let span = el.firstElementChild;
+  if (!span || !el.classList.contains('marquee')) {
+    span = document.createElement('span');
+    el.textContent = '';
+    el.append(span);
+    el.classList.add('marquee');
+    marqueeObserver?.observe(el);
+  }
+  if (span.textContent !== text) {
+    span.textContent = text;
+    measureMarquee(el);
+  }
+}
+function measureMarquee(el) {
+  const span = el.firstElementChild;
+  if (!span) return;
+  el.classList.remove('run');
+  const shift = Math.ceil(span.getBoundingClientRect().width - el.clientWidth);
+  if (shift > 2 && el.clientWidth > 0) {
+    el.style.setProperty('--shift', `${shift}px`);
+    el.style.setProperty('--dur', `${Math.max(4, shift / 25 + 2).toFixed(1)}s`);
+    el.classList.add('run');
+  }
+}
+
 let host = null, box = null;
 const toasts = new Map();
 const fmt = (b) => b == null ? '' : b < 1048576 ? `${Math.round(b / 1024)} KB` : `${(b / 1048576).toFixed(1)} MB`;
@@ -35,7 +63,13 @@ function ensure() {
     .wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; font: 13px/1.4 system-ui, sans-serif; width: min(320px, calc(100vw - 32px)); }
     .t { min-width: 0; background: #18181e; color: #ececf1; border-radius: 12px; padding: 10px 12px; box-shadow: 0 6px 24px #0005; }
     .top { display: flex; justify-content: space-between; gap: 8px; }
-    .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+    .title { font-weight: 600; flex: 1; }
+    .top { min-width: 0; }
+.marquee { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+    .marquee.run { text-overflow: clip; }
+    .marquee.run > span { display: inline-block; animation: marquee var(--dur) ease-in-out infinite alternate; }
+    @keyframes marquee { 0%, 20% { transform: translateX(0); } 80%, 100% { transform: translateX(calc(-1 * var(--shift))); } }
+    @media (prefers-reduced-motion: reduce) { .marquee.run { text-overflow: ellipsis; } .marquee.run > span { display: inline; animation: none; } }
     .x { background: none; border: 0; color: #9a9aa8; cursor: pointer; font: inherit; padding: 0 2px; }
     .sub { color: #9a9aa8; margin-top: 2px; }
     .sub.err { color: #ff6b6b; }
@@ -59,7 +93,7 @@ browser.runtime.onMessage.addListener((msg) => {
     box.append(el);
     toasts.set(j.id, el);
   }
-  el.querySelector('.title').textContent = j.title || j.url || 'Download';
+  marquee(el.querySelector('.title'), j.title || j.url || 'Download');
   const p = j.progress || {};
   let frac = null, sub = LABEL[j.state] || j.state;
   if (j.state === 'fetching' && p.total) { frac = p.downloaded / p.total; sub = `${Math.floor(frac * 100)}% · ${fmt(p.downloaded)} of ${fmt(p.total)}`; }
