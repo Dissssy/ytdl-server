@@ -82,7 +82,12 @@ async fn main() -> anyhow::Result<()> {
             .service(api_delete)
             .service(api_cookies_put)
             .service(api_cookies_delete)
-            .service(actix_files::Files::new("/", &web_dir).index_file("index.html"))
+            // Inline, so Firefox offers to install media-downloader.xpi rather than saving it.
+            .service(
+                actix_files::Files::new("/", &web_dir)
+                    .index_file("index.html")
+                    .mime_override(|_| header::DispositionType::Inline),
+            )
     })
     // Long downloads hold /download_now open; don't time out slow clients.
     .client_request_timeout(Duration::ZERO)
