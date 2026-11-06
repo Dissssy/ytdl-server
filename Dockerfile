@@ -1,22 +1,23 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY . .
-RUN cargo build --release \
- && cp target/release/ytdl-server /ytdl-server
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked
+
+# yt-dlp needs a JavaScript runtime for YouTube.
+FROM denoland/deno:bin-2.9.8 AS deno
 
 FROM python:3.12-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
-# The server calls /root/.pyenv/shims/python (to pip-upgrade yt-dlp) and
-# /root/.pyenv/shims/yt-dlp by absolute path, and yt-dlp by name via ytd-rs.
-# A venv on PATH plus shim links satisfies all three without code changes.
+# The server upgrades yt-dlp in this venv at startup and daily.
 RUN python -m venv /opt/ytdlp \
- && /opt/ytdlp/bin/pip install --no-cache-dir --pre "yt-dlp[default,curl-cffi]" \
- && mkdir -p /root/.pyenv/shims \
- && ln -s /opt/ytdlp/bin/python /root/.pyenv/shims/python \
- && ln -s /opt/ytdlp/bin/yt-dlp /root/.pyenv/shims/yt-dlp
+ && /opt/ytdlp/bin/pip install --no-cache-dir --pre "yt-dlp[default,curl-cffi]"
+COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=build /src/target/release/ytdl-server /usr/local/bin/ytdl-server
+COPY web /app/web
 ENV PATH=/opt/ytdlp/bin:$PATH \
-    COOKIES_PATH=/root/cookies.txt
-COPY --from=build /ytdl-server /usr/local/bin/ytdl-server
+    COOKIES_PATH=/root/cookies.txt \
+    WEB_DIR=/app/web
 CMD ["ytdl-server"]

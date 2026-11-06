@@ -5,11 +5,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: America/New_York
-    # Caddy (ytdlp.deadlyneurotox.in) proxies here and serves the static pages itself.
+    # Caddy (ytdlp.deadlyneurotox.in) proxies here; the server serves the page from web/.
     ports:
       - 127.0.0.1:12221:12221
     volumes:
-      # config.json (host, port, dirs, auth keys); the server watches it for changes.
+      # config.json (host, port, dirs, users); re-read whenever it changes.
       - /root/.config/ytdl-rs:/root/.config/ytdl-rs
       # Read-write: yt-dlp saves refreshed cookies back to the file.
       - /mnt/VoidNeurotoxin/cookies.txt:/root/cookies.txt
