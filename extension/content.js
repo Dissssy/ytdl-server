@@ -32,10 +32,10 @@ function ensure() {
   const root = host.attachShadow({ mode: 'closed' });
   root.innerHTML = `<style>
     :host { all: initial; }
-    .wrap { display: grid; gap: 8px; font: 13px/1.4 system-ui, sans-serif; width: 300px; }
-    .t { background: #18181e; color: #ececf1; border-radius: 12px; padding: 10px 12px; box-shadow: 0 6px 24px #0005; }
+    .wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; font: 13px/1.4 system-ui, sans-serif; width: min(320px, calc(100vw - 32px)); }
+    .t { min-width: 0; background: #18181e; color: #ececf1; border-radius: 12px; padding: 10px 12px; box-shadow: 0 6px 24px #0005; }
     .top { display: flex; justify-content: space-between; gap: 8px; }
-    .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
     .x { background: none; border: 0; color: #9a9aa8; cursor: pointer; font: inherit; padding: 0 2px; }
     .sub { color: #9a9aa8; margin-top: 2px; }
     .sub.err { color: #ff6b6b; }
