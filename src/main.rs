@@ -1,815 +1,423 @@
 mod config;
-use actix_web::{get, web, HttpResponse, Responder};
-use anyhow::{anyhow, Error};
-use config::safe_get;
-use lazy_static::lazy_static;
-use notify::Watcher;
-use rand::seq::SliceRandom;
+mod errors;
+mod jobs;
+mod probe;
+
+use actix_web::{
+    delete, get,
+    http::header,
+    post,
+    web::{self, Bytes, Data, Json, Path, Query},
+    HttpRequest, HttpResponse,
+};
+use futures_util::{stream, Stream, StreamExt};
+use jobs::{Jobs, LegacyQuality, Plan, State, Target};
+use probe::Mode;
 use serde::Deserialize;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use tokio::{sync::Mutex, task::JoinHandle};
-use ytd_rs::Arg;
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
-lazy_static! {
-    static ref PATH: PathBuf = get_path().unwrap();
+const SITE: &str = "https://ytdlp.deadlyneurotox.in";
+
+fn usage() {
+    println!(
+        "ytdl-server              run the server
+ytdl-server -a NAME [--nas]   add a user and print their invite link
+ytdl-server -r NAME       remove a user
+ytdl-server --nas NAME on|off   set whether a user's downloads go to the NAS
+ytdl-server -l            list users"
+    );
 }
 
-lazy_static! {
-    static ref CONFIG: config::ConfigLoader = config::ConfigLoader::new();
-}
-
-#[tokio::main]
-async fn main() {
-    let args: Vec<String> = std::env::args().collect();
-
-    match (args.get(1).map(|s| s.as_str()), args.get(2)) {
-        (_, Some(_)) => {
-            println!("Invalid arguments");
-            return;
-        }
-        (Some("-a"), _) => {
-            let user: String = safe_get("Username");
-            let key: String = generate_api_key();
-            let mut config = CONFIG.get().await;
-            let invite_link = format!(
-                "https://ytdlp.deadlyneurotox.in/invite.html?key={}",
-                urlencoding::encode(&key)
-            );
-            config.auth_keys.push(config::AuthInfo { user, key });
-            let file = std::fs::File::create(PATH.join("config.json")).unwrap();
-            serde_json::to_writer_pretty(file, &config).unwrap();
-            println!("User added, invite link: {invite_link}");
-            return;
-        }
-        (Some("-r"), _) => {
-            let config = CONFIG.get().await;
-            for user in config.auth_keys.iter() {
-                println!("{}", user.user);
-            }
-            let user: String = safe_get("Username");
-            let mut config = config.clone();
-            let index = config
-                .auth_keys
-                .iter()
-                .position(|x| x.user == user)
-                .unwrap_or_else(|| {
-                    println!("User not found");
-                    std::process::exit(1);
-                });
-            config.auth_keys.remove(index);
-            let file = std::fs::File::create(PATH.join("config.json")).unwrap();
-            serde_json::to_writer_pretty(file, &config).unwrap();
-            return;
-        }
-        (Some("-l"), _) => {
-            for user in CONFIG.get().await.auth_keys.iter() {
-                println!("{}", user.user);
-            }
-            return;
-        }
+#[actix_web::main]
+async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let path = config::path();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        [] => {}
+        ["-a", name] => return config::cli::add(&path, name, false, SITE),
+        ["-a", name, "--nas"] => return config::cli::add(&path, name, true, SITE),
+        ["-r", name] => return config::cli::remove(&path, name),
+        ["--nas", name, on] => return config::cli::set_nas(&path, name, matches!(*on, "on" | "true" | "yes")),
+        ["-l"] => return config::cli::list(&path),
         _ => {
-            println!(
-                "{}",
-                ytd_rs::YoutubeDL::new(&PATH, vec![Arg::new("--version")], "",)
-                    .expect("Failed to create ytdl object")
-                    .download()
-                    .expect("Failed to download")
-                    .output()
-            );
+            usage();
+            std::process::exit(2);
         }
     }
 
-    let joinhandles: Arc<Mutex<Handles>> = Arc::new(Mutex::new(Handles::new()));
-    let joinhandles2 = joinhandles.clone();
-    let joinhandles3 = joinhandles.clone();
-    tokio::spawn(check_finished(joinhandles3));
+    let store = config::Store::open(path)?;
+    let config = store.get();
+    let jobs = Jobs::new(store);
+    jobs.start();
+    let web_dir = std::env::var("WEB_DIR").unwrap_or_else(|_| "web".into());
+    println!("listening on {}:{}, serving the page from {web_dir}", config.host, config.port);
+
+    let data = Data::from(jobs);
     actix_web::HttpServer::new(move || {
         actix_web::App::new()
-            .app_data(web::Data::new(joinhandles2.clone()))
-            .service(get)
-            .service(check)
-            .service(get_now)
-            .service(get_info_route)
+            .app_data(data.clone())
+            .app_data(web::JsonConfig::default().error_handler(|e, _| {
+                let body = serde_json::json!({ "message": "Bad request.", "detail": e.to_string() });
+                actix_web::error::InternalError::from_response(e, HttpResponse::BadRequest().json(body)).into()
+            }))
+            .service(legacy_download)
+            .service(legacy_check)
+            .service(legacy_download_now)
+            .service(legacy_get_info)
+            .service(api_me)
+            .service(api_probe)
+            .service(api_create)
+            .service(api_list)
+            .service(api_events)
+            .service(api_get)
+            .service(api_file)
+            .service(api_delete)
+            .service(actix_files::Files::new("/", &web_dir).index_file("index.html"))
     })
-    .client_request_timeout(std::time::Duration::from_secs(0))
-    .bind(format!(
-        "{}:{}",
-        CONFIG.get().await.host,
-        CONFIG.get().await.port
-    ))
-    .unwrap()
+    // Long downloads hold /download_now open; don't time out slow clients.
+    .client_request_timeout(Duration::ZERO)
+    .bind((config.host.as_str(), config.port))?
     .run()
-    .await
-    .unwrap();
-
-    let mut joinhandles = joinhandles.lock().await;
-    for (id, handle) in joinhandles.handles.drain() {
-        let x = handle.joinhandle.await;
-        match x {
-            Ok(Ok(_)) => println!("{id} finished successfully"),
-            Ok(Err(e)) => println!("{} failed: {}\n\nInfo: {}\n", id, e, handle.info),
-            Err(e) => println!("{} panicked: {:?}\n\nInfo: {}\n", id, e, handle.info),
-        }
-    }
-}
-
-#[get("/download_now")]
-async fn get_now(
-    info: web::Query<DownloadInfo>,
-    data: web::Data<Arc<Mutex<Handles>>>,
-) -> impl Responder {
-    if !CONFIG
-        .get()
-        .await
-        .auth_keys
-        .iter()
-        .any(|x| Some(&x.key) == info.auth_key.as_ref())
-    {
-        return HttpResponse::Unauthorized().body("Invalid auth key");
-    }
-
-    let res = {
-        let mut data = data.lock().await;
-        data.direct_download(info.into_inner().clone()).await
-    };
-    let file_path = match res {
-        Ok(path) => path,
-        Err(e) => return HttpResponse::InternalServerError().body(e),
-    };
-
-    let lock = file_path.lock().await;
-
-    let path = lock.clone();
-
-    actix_web::HttpResponseBuilder::new(actix_web::http::StatusCode::OK)
-        .append_header((
-            "Content-Disposition",
-            format!(
-                "attachment; filename={}",
-                path.file_name().and_then(|x| x.to_str()).unwrap_or("file")
-            ),
-        ))
-        .content_type("video/mp4")
-        .body(actix_web::web::Bytes::copy_from_slice(
-            match &std::fs::read(path) {
-                Ok(x) => x,
-                Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
-            },
-        ))
-}
-
-#[get("/download")]
-async fn get(
-    info: web::Query<DownloadInfo>,
-    data: web::Data<Arc<Mutex<Handles>>>,
-) -> impl Responder {
-    if !CONFIG
-        .get()
-        .await
-        .auth_keys
-        .iter()
-        .any(|x| Some(&x.key) == info.auth_key.as_ref())
-    {
-        return HttpResponse::Unauthorized().body("Invalid auth key");
-    }
-    let id = {
-        let mut data = data.lock().await;
-
-        data.deferred_download(info.into_inner().clone()).await
-    };
-
-    HttpResponse::Ok().body(id)
-}
-
-#[get("/get_info")]
-async fn get_info_route(info: web::Query<DownloadInfo>) -> impl Responder {
-    let res = get_formats(info.url.as_str()).await;
-    match res {
-        Ok(info) => HttpResponse::Ok().json(info),
-        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
-    }
-}
-
-#[get("/check/{id}")]
-async fn check(info: web::Path<String>, data: web::Data<Arc<Mutex<Handles>>>) -> impl Responder {
-    let mut data = data.lock().await;
-    if let Some(handle) = data.handles.remove(&info.clone()) {
-        if handle.joinhandle.is_finished() {
-            match handle.joinhandle.await {
-                Ok(Ok(_)) => {
-                    HttpResponse::Ok().body(format!("{} finished successfully", info.clone()))
-                }
-                Ok(Err(e)) => HttpResponse::Ok().body(format!(
-                    "{} failed: {}\n\nInfo: {}\n",
-                    info.clone(),
-                    e,
-                    handle.info
-                )),
-                Err(e) => HttpResponse::Ok().body(format!(
-                    "{} panicked: {:?}\n\nInfo: {}\n",
-                    info.clone(),
-                    e,
-                    handle.info
-                )),
-            }
-        } else {
-            data.handles.insert(info.clone(), handle);
-            HttpResponse::Ok().body("not finished")
-        }
-    } else {
-        HttpResponse::Ok().body("not found")
-    }
-}
-
-#[derive(Deserialize, Clone)]
-struct DownloadInfo {
-    url: String,
-    audio: Option<bool>,
-    auth_key: Option<String>,
-    #[serde(default)]
-    quality: Quality,
-}
-
-#[derive(Deserialize, Clone)]
-enum Quality {
-    #[serde(rename = "high")]
-    High,
-    #[serde(rename = "medium")]
-    Medium,
-    #[serde(rename = "low")]
-    Low,
-}
-
-impl Default for Quality {
-    fn default() -> Self {
-        Self::High
-    }
-}
-
-impl std::fmt::Display for DownloadInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "###FAILED DOWNLOAD INFO###\nurl: {}\naudio: {}\nauth_key: #REDACTED#",
-            self.url,
-            self.audio.unwrap_or(false),
-        )
-    }
-}
-
-struct Handles {
-    handles: HashMap<String, Handle>,
-    pending_direct_downloads: Vec<Arc<Mutex<PathBuf>>>,
-}
-
-struct Handle {
-    info: DownloadInfo,
-    joinhandle: JoinHandle<Result<(), Error>>,
-    expires: i64,
-}
-
-impl Handle {
-    pub async fn new(info: DownloadInfo, joinhandle: JoinHandle<Result<(), Error>>) -> Self {
-        Self {
-            info,
-            joinhandle,
-            expires: chrono::Utc::now().timestamp() + CONFIG.get().await.expire_time,
-        }
-    }
-}
-
-impl Handles {
-    fn new() -> Self {
-        Self {
-            handles: HashMap::new(),
-            pending_direct_downloads: Vec::new(),
-        }
-    }
-    async fn deferred_download(&mut self, info: DownloadInfo) -> String {
-        let mut id = uuid::Uuid::new_v4().to_string();
-
-        while self.handles.contains_key(&id) {
-            id = uuid::Uuid::new_v4().to_string();
-        }
-        let joinhandle = tokio::spawn(Self::download(id.clone(), info.clone(), false));
-        self.handles
-            .insert(id.clone(), Handle::new(info, joinhandle).await);
-        id
-    }
-    async fn direct_download(
-        &mut self,
-        info: DownloadInfo,
-    ) -> Result<Arc<Mutex<std::path::PathBuf>>, String> {
-        let mut id = uuid::Uuid::new_v4().to_string();
-        while self.handles.contains_key(&id) {
-            id = uuid::Uuid::new_v4().to_string();
-        }
-        let joinhandle = tokio::spawn(Self::download(id.clone(), info.clone(), true));
-        let x = joinhandle.await;
-        match x {
-            Ok(Ok(_)) => {
-                let path = CONFIG.get().await.get_tmp_dir();
-                let path = path.join(format!(
-                    "{}.{}",
-                    id,
-                    if info.audio.unwrap_or(false) {
-                        "mp3"
-                    } else {
-                        "mp4"
-                    }
-                ));
-
-                let path = Arc::new(Mutex::new(path));
-                self.pending_direct_downloads.push(path.clone());
-                Ok(path)
-            }
-            Ok(Err(e)) => Err(format!("Download failed: {e}")),
-            Err(e) => Err(format!("Download panicked: {e:?}")),
-        }
-    }
-    async fn download(id: String, info: DownloadInfo, tmp: bool) -> Result<(), Error> {
-        let config = CONFIG.get().await;
-
-        let url = info.url;
-
-        url_tests(url.as_str()).await?;
-
-        let audio = info.audio.unwrap_or(false);
-        // let path = PATH.join("tmp");
-        let path = PathBuf::from(config.tmp_dir.clone());
-
-        if !path.exists() {
-            tokio::fs::create_dir(&path).await?;
-        }
-
-        // let best_size: f64 = (config.max_file_size as f64 / 1024. / 1024.)
-        //     * match info.quality {
-        //         Quality::High => 1.0,
-        //         Quality::Medium => 0.33,
-        //         Quality::Low => 0.05,
-        //     };
-
-        let mut args = vec![
-            Arg::new_with_arg("--output", format!("{id}.%(ext)s").as_str()),
-            Arg::new("--verbose"),
-            Arg::new("--embed-metadata"),
-            Arg::new("--embed-thumbnail"),
-            Arg::new("--no-playlist"),
-            Arg::new("--force-ipv4"),
-            // Arg::new_with_arg(
-            //     "-f",
-            //     &format!(
-            //         "best{}[filesize<{}M]",
-            //         if audio { "audio" } else { "video" },
-            //         best_size.floor() as i64
-            //     ),
-            // ),
-            Arg::new_with_arg(
-                "--max-filesize",
-                format!("{}M", config.max_file_size / 1024 / 1024).as_str(),
-            ),
-        ];
-        if audio {
-            args.push(Arg::new("-x"));
-            args.push(Arg::new_with_arg("--audio-format", "mp3"));
-        } else {
-            args.push(Arg::new_with_arg(
-                "-S",
-                format!(
-                    "{}res,ext:mp4:m4a",
-                    match info.quality {
-                        Quality::High => "",
-                        Quality::Medium => "height:480,",
-                        Quality::Low => "height:240,",
-                    }
-                )
-                .as_str(),
-            ));
-            args.push(Arg::new_with_arg("--recode", "mp4"));
-        }
-        if let Some(cookies_path) = &config.cookies_path {
-            args.push(Arg::new_with_arg("--cookies", cookies_path.as_str()));
-        }
-
-        println!("args: {args:?}");
-
-        let ytd_no_thumb = ytd_rs::YoutubeDL::new(
-            &path,
-            args.iter()
-                .filter(|x| !format!("{x}").contains("--embed-thumbnail"))
-                .cloned()
-                .collect(),
-            url.as_str(),
-        )?;
-        let ytd = ytd_rs::YoutubeDL::new(&path, args, url.as_str())?;
-        tokio::task::spawn_blocking(move || match ytd.download() {
-            Ok(v) => Ok(v),
-            Err(e) => match ytd_no_thumb.download() {
-                Ok(v) => Ok(v),
-                Err(_) => Err(e),
-            },
-        })
-        .await??;
-
-        let search_dir = path.join(format!("{}.{}", id, if audio { "mp3" } else { "mp4" }));
-
-        if !search_dir.exists() {
-            return Err(anyhow!("File does not exist"));
-        }
-
-        // let output_path = if tmp {
-        //     config.get_tmp_dir()
-        // } else if audio {
-        //     config.get_audio_dir()
-        // } else {
-        //     config.get_video_dir()
-        // };
-        // we just download always to .get_tmp_dir() now so
-        if !tmp {
-            let output_path = if audio {
-                config.get_audio_dir()
-            } else {
-                config.get_video_dir()
-            };
-            let output_path =
-                output_path.join(format!("{}.{}", id, if audio { "mp3" } else { "mp4" }));
-            tokio::fs::copy(search_dir.clone(), output_path).await?;
-            tokio::fs::remove_file(search_dir).await?;
-        }
-
-        Ok(())
-    }
-}
-
-fn get_path() -> Result<PathBuf, Error> {
-    let path = dirs::config_dir().unwrap().join("ytdl-rs");
-    std::fs::create_dir_all(&path)?;
-    Ok(path)
-}
-
-async fn check_finished(data: Arc<Mutex<Handles>>) {
-    let mut clean_up_tmp_files = tokio::time::interval(std::time::Duration::from_secs(60));
-    let mut clean_up_finished_downloads = tokio::time::interval(std::time::Duration::from_secs(60));
-    // let mut refresh_config_file = tokio::time::interval(std::time::Duration::from_secs(30));
-    let (notify, mut refresh_config_file) = tokio::sync::mpsc::channel(1);
-    let mut watcher =
-        notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| match res {
-            Ok(notify::Event {
-                kind:
-                    notify::EventKind::Access(notify::event::AccessKind::Close(
-                        notify::event::AccessMode::Write,
-                    )),
-                ..
-            }) => {
-                if let Err(e) = notify.try_send(()) {
-                    println!("Failed to send notify: {e}");
-                }
-            }
-            Err(e) => println!("watch error: {e:?}"),
-            _ => {}
-        })
-        .expect("Failed to create watcher");
-    let mut path = PATH.clone();
-    path.push("config.json");
-    watcher
-        .watch(path.as_path(), notify::RecursiveMode::NonRecursive)
-        .expect("Failed to watch file");
-    let mut update_ytdlp = tokio::time::interval(std::time::Duration::from_secs(60 * 60 * 24));
-
-    loop {
-        tokio::select! {
-            _ = update_ytdlp.tick() => {
-                if let Err(e) = install_and_update_ytdlp().await {
-                    println!("Failed to update yt-dlp: {e}");
-                }
-            }
-            _ = clean_up_finished_downloads.tick() => {
-                let mut data = data.lock().await;
-                let keys = data.handles.keys().cloned().collect::<Vec<String>>();
-                for id in keys {
-                    if let Some(handle) = data.handles.remove(&id) {
-                        if handle.joinhandle.is_finished()
-                            && handle.expires < chrono::Utc::now().timestamp()
-                        {
-                            let x = handle.joinhandle.await;
-                            match x {
-                                Ok(Ok(_)) => println!("{id} finished successfully"),
-                                Ok(Err(e)) => {
-                                    println!("{} failed: {}\n\nInfo: {}\n", id, e, handle.info)
-                                }
-                                Err(e) => {
-                                    println!("{} panicked: {:?}\n\nInfo: {}\n", id, e, handle.info)
-                                }
-                            }
-                        } else {
-                            data.handles.insert(id, handle);
-                        }
-                    } else {
-                        data.handles.remove(&id);
-                    }
-                }
-            }
-            _ = clean_up_tmp_files.tick() => {
-                let mut data = data.lock().await;
-                data.pending_direct_downloads.retain(|x| {
-                    if let Ok(lock) = x.try_lock() {
-                        if lock.exists() {
-                            if let Err(e) = std::fs::remove_file(lock.clone()) {
-                                println!("Failed to remove file: {e}");
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    } else {
-                        true
-                    }
-                });
-            }
-            Some(()) = refresh_config_file.recv() => {
-                CONFIG.reload().await;
-                println!("Config reloaded");
-            }
-        }
-    }
-}
-
-static CHARS: &[char] = &[
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
-    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',
-    'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
-    'V', 'W', 'X', 'Y', 'Z', '!', '@', '#', '$', '%', '&', '*', '?',
-];
-
-fn generate_api_key() -> String {
-    let mut rng = rand::thread_rng();
-    let key: String = (0..128).map(|_| CHARS.choose(&mut rng).unwrap()).collect();
-    key
-}
-
-async fn url_tests(url: &str) -> anyhow::Result<()> {
-    let start = url.split("TEST ").collect::<Vec<_>>();
-
-    if start.len() != 2 {
-        return Ok(());
-    }
-
-    if start.first() != Some(&"") {
-        return Ok(());
-    }
-
-    let mut command = if let Some(command) = start.get(1) {
-        command.split(' ')
-    } else {
-        return Ok(());
-    };
-
-    match (command.next(), command.next()) {
-        (Some("ERROR"), _) => Err(anyhow!("Test error")),
-        (Some("DELAY"), Some(n)) => {
-            let n = n.parse::<u64>()?;
-
-            tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-            Err(anyhow!("Test delay finished"))
-        }
-        (x, y) => Err(anyhow!(
-            "Invalid test command: {} {}",
-            x.unwrap_or(""),
-            y.unwrap_or("")
-        )),
-    }
-}
-
-async fn install_and_update_ytdlp() -> anyhow::Result<()> {
-    // install yt-dlp if not installed
-    // update yt-dlp if installed
-    // check if yt-dlp is installed
-    // return version of yt-dlp
-    // return error if yt-dlp is not installed
-
-    let ytdlp = tokio::process::Command::new("/root/.pyenv/shims/python")
-        .args(["-m", "pip", "install", "--upgrade", "--pre", "yt-dlp[default,curl-cffi]"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-
-    // read all of stdin
-    let output = ytdlp.wait_with_output().await?;
-
-    let output = std::str::from_utf8(&output.stderr)?;
-
-    if output.contains("ERROR") {
-        return Err(anyhow!("{}", output));
-    }
-
+    .await?;
     Ok(())
 }
 
-async fn get_formats(url: &str) -> anyhow::Result<YtdlDump> {
-    // use yt-dlp to list all available VIDEO and AUDIO formats for a url ONLY
+// ---------- auth ----------
 
-    let ytdlp = tokio::process::Command::new("/root/.pyenv/shims/yt-dlp")
-        .args(["--dump-json", "--skip-download", "--no-playlist", "--force-ipv4", "--js-runtimes \"deno:/root/.deno/bin/deno\"", url])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-
-    // read all of stdin
-    let output = ytdlp.wait_with_output().await?;
-
-    let output = std::str::from_utf8(&output.stdout)?;
-
-    let mut output: RawDump = serde_json::from_str(output).or(Err(anyhow!("{}", output)))?;
-
-    output.strip_useless_formats();
-
-    Ok(output.into())
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct RawDump {
-    title: String,
-    formats: Vec<RawFormat>,
-    thumbnail: Option<String>,
-}
-
-impl RawDump {
-    fn strip_useless_formats(&mut self) {
-        self.formats.retain(|x| {
-            (x.acodec().is_some() || x.vcodec().is_some()) && x.filesize_approx().is_some()
-        });
-    }
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct RawFormat {
-    format_id: String,
-    acodec: Option<Codec>,
-    vcodec: Option<Codec>,
-    resolution: Resolution,
-    filesize_approx: Option<u64>,
-}
-
-impl RawFormat {
-    fn acodec(&self) -> Option<&str> {
-        self.acodec.as_ref().and_then(|x| x.as_option())
-    }
-
-    fn vcodec(&self) -> Option<&str> {
-        self.vcodec.as_ref().and_then(|x| x.as_option())
-    }
-
-    fn resolution(&self) -> Option<&str> {
-        self.resolution.as_option()
-    }
-
-    fn filesize_approx(&self) -> Option<u64> {
-        self.filesize_approx
-    }
-
-    fn filesize_approx_human(&self) -> Option<String> {
-        self.filesize_approx.map(human_readable_bytes)
-    }
-}
-
-#[derive(serde_enum_str::Deserialize_enum_str, Debug)]
-enum Codec {
-    #[serde(rename = "none")]
-    None,
-    #[serde(other)]
-    Some(String),
-}
-
-impl Codec {
-    fn as_option(&self) -> Option<&str> {
-        match self {
-            Codec::None => None,
-            Codec::Some(x) => Some(x),
+/// The key from `Authorization: Bearer`, or `?key=` / `?auth_key=` (EventSource and links can't set headers).
+fn key_of(req: &HttpRequest) -> Option<String> {
+    if let Some(v) = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        if let Some(k) = v.strip_prefix("Bearer ") {
+            return Some(k.trim().to_string());
         }
     }
+    let query = Query::<HashMap<String, String>>::from_query(req.query_string()).ok()?;
+    query.get("key").or(query.get("auth_key")).cloned()
 }
 
-#[derive(serde_enum_str::Deserialize_enum_str, Debug)]
-enum Resolution {
-    #[serde(rename = "audio only")]
-    None,
-    // catch all bc i just only wanted a special case for none
-    #[serde(other)]
-    Some(String),
+fn user_of(req: &HttpRequest, jobs: &Jobs) -> Result<config::User, HttpResponse> {
+    key_of(req)
+        .and_then(|k| jobs.config.user(&k))
+        .ok_or_else(|| HttpResponse::Unauthorized().json(serde_json::json!({ "message": "That key isn't valid. Use your invite link again.", "detail": "" })))
 }
 
-impl Resolution {
-    fn as_option(&self) -> Option<&str> {
-        match self {
-            Resolution::None => None,
-            Resolution::Some(x) => Some(x),
+fn bad(message: &str, detail: impl ToString) -> HttpResponse {
+    HttpResponse::BadRequest().json(serde_json::json!({ "message": message, "detail": detail.to_string() }))
+}
+
+// ---------- legacy routes (the old page and the userscripts) ----------
+
+#[derive(Deserialize)]
+struct LegacyQuery {
+    url: String,
+    audio: Option<bool>,
+    #[serde(default)]
+    quality: Option<String>,
+}
+
+fn legacy_plan(q: &LegacyQuery) -> Plan {
+    let quality = match q.quality.as_deref() {
+        Some("medium") => LegacyQuality::Medium,
+        Some("low") => LegacyQuality::Low,
+        _ => LegacyQuality::High,
+    };
+    Plan::Legacy { audio: q.audio.unwrap_or(false), quality }
+}
+
+/// Queues a download into the NAS folder; returns the job id as text.
+#[get("/download")]
+async fn legacy_download(req: HttpRequest, q: Query<LegacyQuery>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().body("Invalid auth key"),
+    };
+    if !user.nas {
+        return HttpResponse::Forbidden().body("This key can't save to the NAS");
+    }
+    let view = jobs.submit(&user.user, q.url.clone(), Target::Nas, legacy_plan(&q));
+    HttpResponse::Ok().body(view.id)
+}
+
+#[get("/check/{id}")]
+async fn legacy_check(id: Path<String>, jobs: Data<Jobs>) -> HttpResponse {
+    let body = match jobs.get(&id) {
+        None => "not found".to_string(),
+        Some(v) => match v.state {
+            State::Queued | State::Fetching | State::Processing => "not finished".to_string(),
+            State::Failed | State::Cancelled => format!(
+                "{} failed: {}\n\nInfo: ###FAILED DOWNLOAD INFO###\nurl: {}\naudio: {}\nauth_key: #REDACTED#\n",
+                v.id,
+                v.error.map(|e| e.to_string()).unwrap_or_else(|| "cancelled".into()),
+                v.url,
+                v.audio
+            ),
+            _ => format!("{} finished successfully", v.id),
+        },
+    };
+    HttpResponse::Ok().body(body)
+}
+
+/// Queues a browser download and answers with the file once it's ready.
+#[get("/download_now")]
+async fn legacy_download_now(req: HttpRequest, q: Query<LegacyQuery>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().body("Invalid auth key"),
+    };
+    let mut events = jobs.events.subscribe();
+    let view = jobs.submit(&user.user, q.url.clone(), Target::Browser, legacy_plan(&q));
+    let mut state = view.state;
+    while !state.finished() {
+        match events.recv().await {
+            Ok(v) if v.id == view.id => state = v.state,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                state = jobs.get(&view.id).map(|v| v.state).unwrap_or(State::Failed);
+            }
+            Err(_) => break,
         }
     }
-}
-
-fn human_readable_bytes(bytes: u64) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-    let mut bytes = bytes as f64;
-    let mut i = 0;
-    while bytes >= 1024.0 && i < units.len() {
-        bytes /= 1024.0;
-        i += 1;
-    }
-    format!("{:.2} {}", bytes, units[i])
-}
-
-#[derive(serde::Serialize, Debug)]
-struct YtdlDump {
-    title: String,
-    formats: Vec<YtdlFormat>,
-    thumbnail: Option<String>,
-}
-
-#[derive(serde::Serialize, Debug)]
-struct YtdlFormat {
-    format_id: String,
-    kind: FormatKind,
-    filesize_approx: Filesize,
-}
-
-#[derive(serde::Serialize, Debug)]
-enum FormatKind {
-    Video(Video),
-    Audio(String),
-    Both { video: Video, audio: String },
-}
-
-#[derive(serde::Serialize, Debug)]
-struct Video {
-    codec: String,
-    resolution: String,
-}
-
-#[derive(serde::Serialize, Debug)]
-struct Filesize {
-    bytes: u64,
-    human_readable: String,
-}
-
-impl From<RawDump> for YtdlDump {
-    fn from(dump: RawDump) -> Self {
-        Self {
-            title: dump.title,
-            formats: dump
-                .formats
-                .into_iter()
-                .flat_map(|i| {
-                    YtdlFormat::try_from(i).inspect_err(|e| {
-                        println!("Failed to convert format: {e}");
-                    })
-                })
-                .collect(),
-            thumbnail: dump.thumbnail,
-        }
+    match jobs.get(&view.id) {
+        Some(v) if v.state == State::Ready => send_file(&jobs, &v.id, &user.user).await,
+        Some(v) => HttpResponse::InternalServerError().body(v.error.map(|e| e.to_string()).unwrap_or_else(|| "Download failed".into())),
+        None => HttpResponse::InternalServerError().body("Download failed"),
     }
 }
 
-impl TryFrom<RawFormat> for YtdlFormat {
-    type Error = anyhow::Error;
+#[get("/get_info")]
+async fn legacy_get_info(req: HttpRequest, q: Query<LegacyQuery>, jobs: Data<Jobs>) -> HttpResponse {
+    if let Err(r) = user_of(&req, &jobs) {
+        return r;
+    }
+    probe_response(&jobs, &q.url).await
+}
 
-    fn try_from(format: RawFormat) -> Result<Self, Self::Error> {
-        let kind = match (format.acodec(), format.vcodec()) {
-            (Some(audio), Some(video)) => FormatKind::Both {
-                video: Video {
-                    codec: video.to_string(),
-                    resolution: format
-                        .resolution()
-                        .ok_or(anyhow!("No resolution for video"))?
-                        .to_string(),
+// ---------- JSON API ----------
+
+#[get("/api/me")]
+async fn api_me(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
+    match user_of(&req, &jobs) {
+        Ok(u) => HttpResponse::Ok().json(serde_json::json!({
+            "user": u.user,
+            "nas": u.nas,
+            "max_file_size": jobs.config.get().max_file_size,
+        })),
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+struct ProbeReq {
+    url: String,
+}
+
+async fn probe_response(jobs: &Jobs, url: &str) -> HttpResponse {
+    let url = url.trim();
+    if url.is_empty() {
+        return bad("Paste a link first.", "");
+    }
+    match jobs.probe(url).await {
+        Ok(info) => {
+            let stats = jobs.stats.lock().unwrap().clone();
+            HttpResponse::Ok().json(serde_json::json!({
+                "info": &*info,
+                "ladders": {
+                    "compat": probe::ladder(&info, Mode::Compat),
+                    "best": probe::ladder(&info, Mode::Best),
+                    "audio": probe::ladder(&info, Mode::Audio),
                 },
-                audio: audio.to_string(),
-            },
-            (Some(audio), None) => FormatKind::Audio(audio.to_string()),
-            (None, Some(video)) => FormatKind::Video(Video {
-                codec: video.to_string(),
-                resolution: format
-                    .resolution()
-                    .ok_or(anyhow!("No resolution for video"))?
-                    .to_string(),
-            }),
-            (None, None) => return Err(anyhow!("No audio or video codec")),
-        };
-
-        Ok(Self {
-            kind,
-            filesize_approx: Filesize {
-                bytes: format.filesize_approx().unwrap_or(0),
-                human_readable: format.filesize_approx_human().unwrap_or_default(),
-            },
-            format_id: format.format_id,
-        })
+                "formats": &info.formats,
+                "rates": { "speed": stats.speed_for(&info.site), "encode": stats.encode_rate },
+            }))
+        }
+        Err(f) => HttpResponse::UnprocessableEntity().json(f),
     }
 }
 
-// change download now to spit the data to stdout from multiple clients using named pipes in to ffmpeg, spit the ffmpeg out to be downloaded
+#[post("/api/probe")]
+async fn api_probe(req: HttpRequest, body: Json<ProbeReq>, jobs: Data<Jobs>) -> HttpResponse {
+    if let Err(r) = user_of(&req, &jobs) {
+        return r;
+    }
+    probe_response(&jobs, &body.url).await
+}
+
+#[derive(Deserialize)]
+struct CreateReq {
+    url: String,
+    mode: Mode,
+    /// Bytes.
+    max_size: Option<u64>,
+    format: Option<String>,
+    /// "browser" (default) or "nas" (NAS users only).
+    #[serde(default)]
+    target: Option<String>,
+}
+
+#[post("/api/jobs")]
+async fn api_create(req: HttpRequest, body: Json<CreateReq>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let url = body.url.trim().to_string();
+    if url.is_empty() {
+        return bad("Paste a link first.", "");
+    }
+    let target = match body.target.as_deref() {
+        Some("nas") if user.nas => Target::Nas,
+        Some("nas") => return HttpResponse::Forbidden().json(serde_json::json!({ "message": "This key can't save to the NAS.", "detail": "" })),
+        // "auto" means the NAS for NAS users, used by the browser extension.
+        Some("auto") if user.nas => Target::Nas,
+        _ => Target::Browser,
+    };
+    let plan = Plan::Pick { mode: body.mode, cap: body.max_size, format: body.format.clone().filter(|f| !f.is_empty()) };
+    HttpResponse::Ok().json(jobs.submit(&user.user, url, target, plan))
+}
+
+#[get("/api/jobs")]
+async fn api_list(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
+    match user_of(&req, &jobs) {
+        Ok(u) => HttpResponse::Ok().json(jobs.list(&u.user)),
+        Err(r) => r,
+    }
+}
+
+#[get("/api/jobs/{id}")]
+async fn api_get(req: HttpRequest, id: Path<String>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    match jobs.get(&id).filter(|v| v.owner == user.user) {
+        Some(v) => HttpResponse::Ok().json(v),
+        None => HttpResponse::NotFound().json(serde_json::json!({ "message": "That download is gone.", "detail": "" })),
+    }
+}
+
+#[delete("/api/jobs/{id}")]
+async fn api_delete(req: HttpRequest, id: Path<String>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    if jobs.remove(&id, &user.user) {
+        HttpResponse::NoContent().finish()
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
+/// Server-sent events: a snapshot of this user's jobs, then every change.
+#[get("/api/events")]
+async fn api_events(req: HttpRequest, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let snapshot = serde_json::to_string(&jobs.list(&user.user)).unwrap_or_else(|_| "[]".into());
+    let first = Bytes::from(format!("event: snapshot\ndata: {snapshot}\n\n"));
+    let rx = jobs.events.subscribe();
+    let owner = user.user.clone();
+    let jobs2 = jobs.clone();
+    let updates = stream::unfold((rx, owner, jobs2), |(mut rx, owner, jobs)| async move {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(20), rx.recv()).await {
+                Err(_) => return Some((Ok::<_, actix_web::Error>(Bytes::from_static(b": keepalive\n\n")), (rx, owner, jobs))),
+                Ok(Ok(v)) if v.owner == owner => {
+                    let json = serde_json::to_string(&v).unwrap_or_default();
+                    return Some((Ok(Bytes::from(format!("event: job\ndata: {json}\n\n"))), (rx, owner, jobs)));
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    let snapshot = serde_json::to_string(&jobs.list(&owner)).unwrap_or_else(|_| "[]".into());
+                    return Some((Ok(Bytes::from(format!("event: snapshot\ndata: {snapshot}\n\n"))), (rx, owner, jobs)));
+                }
+                Ok(Err(_)) => return None,
+            }
+        }
+    });
+    HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .insert_header((header::CACHE_CONTROL, "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(stream::once(async move { Ok::<_, actix_web::Error>(first) }).chain(updates))
+}
+
+#[get("/api/jobs/{id}/file")]
+async fn api_file(req: HttpRequest, id: Path<String>, jobs: Data<Jobs>) -> HttpResponse {
+    let user = match user_of(&req, &jobs) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    send_file(&jobs, &id, &user.user).await
+}
+
+/// Streams a finished file from disk; reaching the end marks the job saved.
+async fn send_file(jobs: &Data<Jobs>, id: &str, owner: &str) -> HttpResponse {
+    let Some((path, name)) = jobs.file(id, owner) else {
+        return HttpResponse::NotFound().json(serde_json::json!({ "message": "That file isn't available any more.", "detail": "" }));
+    };
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({ "message": "That file isn't available any more.", "detail": e.to_string() })),
+    };
+    let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let jobs = jobs.clone();
+    let id = id.to_string();
+    let body = Tracked {
+        inner: tokio_util::io::ReaderStream::with_capacity(file, 64 * 1024),
+        on_end: Some(Box::new(move || jobs.mark_saved(&id))),
+    };
+    HttpResponse::Ok()
+        .content_type(mime_for(&name))
+        .insert_header((header::CONTENT_DISPOSITION, content_disposition(&name)))
+        .no_chunking(len)
+        .streaming(body)
+}
+
+struct Tracked<S> {
+    inner: S,
+    on_end: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl<S: Stream + Unpin> Stream for Tracked<S> {
+    type Item = S::Item;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = self.inner.poll_next_unpin(cx);
+        if let Poll::Ready(None) = next {
+            if let Some(f) = self.on_end.take() {
+                f();
+            }
+        }
+        next
+    }
+}
+
+fn mime_for(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "opus" | "ogg" => "audio/ogg",
+        "gif" => "image/gif",
+        _ => "application/octet-stream",
+    }
+}
+
+fn content_disposition(name: &str) -> String {
+    let ascii: String = name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect();
+    let encoded: String = name
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
+}
+
