@@ -36,14 +36,17 @@ async function api(path, opts = {}) {
 // ---------- context menu ----------
 function menus() {
   browser.menus.removeAll();
-  const where = me?.nas ? ' to NAS' : '';
   const contexts = ['page', 'link', 'video', 'audio', 'image'];
   if (!me) {
     browser.menus.create({ id: 'setup', title: 'Media Downloader: sign in…', contexts: ['page', 'link', 'video'] });
     return;
   }
-  browser.menus.create({ id: 'video', title: `Download video${where}`, contexts });
-  browser.menus.create({ id: 'audio', title: `Download audio${where}`, contexts });
+  browser.menus.create({ id: 'video', title: 'Download video', contexts });
+  browser.menus.create({ id: 'audio', title: 'Download audio', contexts });
+  if (me.nas) {
+    browser.menus.create({ id: 'nas-video', title: 'Save video to NAS', contexts });
+    browser.menus.create({ id: 'nas-audio', title: 'Save audio to NAS', contexts });
+  }
   browser.menus.create({ id: 'pick', title: 'Choose quality…', contexts });
   browser.menus.create({ id: 'sep', type: 'separator', contexts: ['page'] });
   browser.menus.create({ id: 'cookies', title: 'Upload cookies for this site', contexts: ['page'] });
@@ -61,11 +64,13 @@ browser.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'cookies') return uploadSiteCookies(tab);
   const url = targetUrl(info, tab);
   if (info.menuItemId === 'pick') return browser.tabs.create({ url: `${settings.server}/?url=${encodeURIComponent(url)}` });
-  start(url, info.menuItemId === 'audio', tab?.id, false);
+  const id = String(info.menuItemId);
+  start(url, id.endsWith('audio'), tab?.id, false, id.startsWith('nas-') ? 'nas' : 'browser');
 });
 
 // ---------- starting jobs ----------
-async function start(url, audio, tabId, closeTab) {
+// target: 'browser', 'nas', or 'auto' (the NAS for NAS users, used by the Gesturify functions).
+async function start(url, audio, tabId, closeTab, target = 'browser') {
   if (!me) {
     notify('Sign in first', 'Open your invite link, or set your key in the extension settings.');
     browser.runtime.openOptionsPage();
@@ -75,7 +80,7 @@ async function start(url, audio, tabId, closeTab) {
     url,
     mode: audio ? 'audio' : settings.videoMode,
     max_size: !audio && settings.videoCap ? settings.videoCap * 1024 * 1024 : null,
-    target: 'auto', // the NAS for NAS users, the browser for everyone else
+    target,
   };
   try {
     const job = await api('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
@@ -91,7 +96,8 @@ async function start(url, audio, tabId, closeTab) {
 
 // From the page (Gesturify functions) and the popup.
 browser.runtime.onMessage.addListener((msg, sender) => {
-  if (msg.type === 'download') return start(msg.url, msg.audio, sender.tab?.id, !!msg.close);
+  // The popup asks for the browser; Gesturify (from a page) keeps its old NAS behaviour for NAS users.
+  if (msg.type === 'download') return start(msg.url, msg.audio, sender.tab?.id ?? msg.tabId, !!msg.close, msg.target || (sender.tab ? 'auto' : 'browser'));
   if (msg.type === 'state') {
     poll();
     return Promise.resolve({ me, server: settings.server, jobs: [...jobs.values()].sort((a, b) => b.created - a.created) });

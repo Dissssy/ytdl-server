@@ -100,8 +100,8 @@ browser.runtime.onMessage.addListener((msg) => {
 });
 
 $('open-options').onclick = () => { browser.runtime.openOptionsPage(); window.close(); };
-$('dl-video').onclick = async () => { const t = await tabUrl(); browser.runtime.sendMessage({ type: 'download', audio: false, url: t.url }); };
-$('dl-audio').onclick = async () => { const t = await tabUrl(); browser.runtime.sendMessage({ type: 'download', audio: true, url: t.url }); };
+$('dl-video').onclick = async () => { const t = await tabUrl(); browser.runtime.sendMessage({ type: 'download', audio: false, url: t.url, tabId: t.id, target: 'browser' }); };
+$('dl-audio').onclick = async () => { const t = await tabUrl(); browser.runtime.sendMessage({ type: 'download', audio: true, url: t.url, tabId: t.id, target: 'browser' }); };
 $('open-site').onclick = async (e) => {
   e.preventDefault();
   const t = await tabUrl();
