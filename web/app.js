@@ -103,6 +103,7 @@ async function signIn(k) {
   if (me.nas) { const s = document.createElement('span'); s.className = 'nas'; s.textContent = 'NAS'; $('who').append(s); }
   $('nas-row').hidden = !me.nas;
   connect();
+  window.postMessage({ source: 'md-page', type: 'signed-in' }, location.origin);
   $('url').focus();
 }
 function signOut(msg) {
@@ -425,8 +426,23 @@ function openSettings() {
   $('cookies-msg').hidden = true;
   $('cookies-file').value = '';
   cookieStatus();
+  extSettings('get-settings');
   $('settings').showModal();
 }
+
+// ---------- the Firefox extension, when installed, exposes its settings here ----------
+let extState = null;
+function extSettings(type, settings) {
+  if (document.documentElement.dataset.mdExtension !== '1') return;
+  window.postMessage({ source: 'md-page', type, settings }, location.origin);
+}
+window.addEventListener('message', (e) => {
+  if (e.source !== window || e.data?.source !== 'md-extension' || e.data.type !== 'settings' || !e.data.settings) return;
+  extState = e.data.settings;
+  $('ext-settings').hidden = false;
+  $('ext-preset').value = `${extState.videoMode}:${extState.videoCap}`;
+  $('ext-notify').checked = !!extState.notify;
+});
 $('who').addEventListener('click', openSettings);
 function cookieStatus() {
   const when = me.cookies ? new Date(me.cookies * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : null;
@@ -457,6 +473,10 @@ $('settings').addEventListener('close', async () => {
   if (v === 'forget') return signOut();
   if (v !== 'save') return;
   store.set('autosave', $('autosave').checked ? '1' : '0');
+  if (extState) {
+    const [videoMode, cap] = $('ext-preset').value.split(':');
+    extSettings('set-settings', { videoMode, videoCap: +cap, notify: $('ext-notify').checked });
+  }
   const k = parseKey($('settings-key').value);
   if (k && k !== key) {
     const old = key;
@@ -473,7 +493,13 @@ if (navigator.userAgent.includes('Firefox')) {
 // Links like /?url=... (from the extension or a bookmarklet) prefill the box.
 const startUrl = new URLSearchParams(location.search).get('url');
 if (key) {
-  signIn(key).then(() => { if (startUrl) { $('url').value = startUrl; runProbe(); } }).catch(() => {});
+  signIn(key).then(() => {
+    if (startUrl) { $('url').value = startUrl; runProbe(); }
+    if (new URLSearchParams(location.search).has('settings')) {
+      openSettings();
+      $('cookies-section').scrollIntoView({ block: 'nearest' });
+    }
+  }).catch(() => {});
 } else {
   signOut();
 }

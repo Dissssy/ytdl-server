@@ -13,11 +13,26 @@
   exportFunction(send(true), ns, { defineAs: 'download_audio' });
 })();
 
-// On the downloader's own site, hand its stored key to the extension.
-try {
-  const key = localStorage.getItem('api_key');
-  if (key && document.querySelector('script[src="app.js"]')) browser.runtime.sendMessage({ type: 'site-key', key });
-} catch {}
+// On the downloader's own site: hand its stored key to the extension on every visit, and let
+// the site's Settings dialog read and change the extension's settings.
+if (document.querySelector('script[src="app.js"]')) {
+  const syncKey = () => {
+    try {
+      const key = localStorage.getItem('api_key');
+      if (key) browser.runtime.sendMessage({ type: 'site-key', key });
+    } catch {}
+  };
+  syncKey();
+  document.documentElement.dataset.mdExtension = '1';
+  window.addEventListener('message', async (e) => {
+    if (e.source !== window || e.data?.source !== 'md-page') return;
+    if (e.data.type === 'signed-in') return syncKey();
+    if (e.data.type === 'get-settings' || e.data.type === 'set-settings') {
+      const settings = await browser.runtime.sendMessage({ type: e.data.type, settings: e.data.settings });
+      window.postMessage({ source: 'md-extension', type: 'settings', settings: settings || null }, location.origin);
+    }
+  });
+}
 
 // ---------- toast ----------
 // Fits a title to its box: an ellipsis at rest, and a slow back-and-forth scroll when it doesn't fit.
@@ -73,6 +88,8 @@ function ensure() {
     .x { background: none; border: 0; color: #9a9aa8; cursor: pointer; font: inherit; padding: 0 2px; }
     .sub { color: #9a9aa8; margin-top: 2px; }
     .sub.err { color: #ff6b6b; }
+    .fix { margin-top: 6px; background: #8b7dff; color: #0f0f13; border: 0; border-radius: 6px; padding: 4px 10px; font: 600 12px system-ui, sans-serif; cursor: pointer; }
+    [hidden] { display: none !important; }
     .bar { height: 4px; background: #2a2a33; border-radius: 2px; overflow: hidden; margin-top: 6px; }
     .bar > div { height: 100%; background: #8b7dff; width: 0; transition: width .4s; }
   </style><div class="wrap"></div>`;
@@ -88,7 +105,8 @@ browser.runtime.onMessage.addListener((msg) => {
   if (!el) {
     el = document.createElement('div');
     el.className = 't';
-    el.innerHTML = '<div class="top"><span class="title"></span><button class="x" title="Dismiss">✕</button></div><div class="sub"></div><div class="bar"><div></div></div>';
+    el.innerHTML = '<div class="top"><span class="title"></span><button class="x" title="Dismiss">✕</button></div><div class="sub"></div><button class="fix" hidden>Upload cookies</button><div class="bar"><div></div></div>';
+    el.querySelector('.fix').onclick = () => browser.runtime.sendMessage({ type: 'open-site', path: '?settings=cookies' });
     el.querySelector('.x').onclick = () => { el.remove(); toasts.delete(j.id); };
     box.append(el);
     toasts.set(j.id, el);
@@ -99,6 +117,8 @@ browser.runtime.onMessage.addListener((msg) => {
   if (j.state === 'fetching' && p.total) { frac = p.downloaded / p.total; sub = `${Math.floor(frac * 100)}% · ${fmt(p.downloaded)} of ${fmt(p.total)}`; }
   if (j.state === 'processing' && p.processing != null) { frac = p.processing; sub = `Converting · ${Math.floor(frac * 100)}%`; }
   if (j.state === 'failed') sub = j.error?.message || 'Failed';
+  const fix = el.querySelector('.fix');
+  fix.hidden = !(j.state === 'failed' && j.error?.hint === 'cookies');
   if (j.target === 'nas' && ['queued', 'fetching', 'processing'].includes(j.state)) sub = 'NAS · ' + sub;
   const subEl = el.querySelector('.sub');
   subEl.textContent = sub;

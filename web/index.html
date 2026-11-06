@@ -100,7 +100,19 @@
       <p id="settings-who"></p>
       <label>Key<input id="settings-key" type="password" autocomplete="off"></label>
       <label class="check"><input type="checkbox" id="autosave"> Save files automatically when they're ready</label>
-      <div class="cookies">
+      <div class="cookies" id="ext-settings" hidden>
+        <h3>Firefox extension</h3>
+        <label>Right-click "Download video" uses
+          <select id="ext-preset">
+            <option value="compat:0">Best quality that plays everywhere (H.264 MP4)</option>
+            <option value="compat:25">Share: H.264 MP4 under 25 MB</option>
+            <option value="compat:10">Discord: H.264 MP4 under 10 MB</option>
+            <option value="best:0">Original quality and codecs</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="ext-notify"> Notify when a download finishes or fails</label>
+      </div>
+      <div class="cookies" id="cookies-section">
         <h3>Your cookies</h3>
         <p id="cookies-status" class="muted"></p>
         <p class="muted small">Some videos need a signed-in account. Export a <code>cookies.txt</code> from your browser while signed in (for example with the "Get cookies.txt LOCALLY" extension) and upload it. Only your downloads use it.</p>

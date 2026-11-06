@@ -95,6 +95,20 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   }
   if (msg.type === 'cancel') return api(`/api/jobs/${msg.id}`, { method: 'DELETE' }).catch(() => {});
   if (msg.type === 'save') return save(msg.id);
+  if (msg.type === 'open-site') return browser.tabs.create({ url: `${settings.server}/${msg.path || ''}` });
+  // The site's Settings dialog shows and edits these when the extension is installed.
+  const fromSite = sender.url?.startsWith(settings.server + '/');
+  if (msg.type === 'get-settings' && fromSite) {
+    return Promise.resolve({ videoMode: settings.videoMode, videoCap: settings.videoCap, notify: settings.notify, version: browser.runtime.getManifest().version });
+  }
+  if (msg.type === 'set-settings' && fromSite) {
+    const v = msg.settings || {};
+    return browser.storage.local.set({
+      videoMode: v.videoMode === 'best' ? 'best' : 'compat',
+      videoCap: [0, 10, 25].includes(v.videoCap) ? v.videoCap : 0,
+      notify: !!v.notify,
+    });
+  }
   // The site's own page shares its stored key, so visiting it once signs the extension in.
   if (msg.type === 'site-key' && msg.key && msg.key !== settings.key && sender.url?.startsWith(settings.server)) {
     return browser.storage.local.set({ key: msg.key });
@@ -134,8 +148,6 @@ function seen(job) {
   if (job.state === 'done') { notify('Saved to NAS', job.title || job.url); tracked.delete(job.id); }
   if (job.state === 'failed') {
     notify('Download failed', `${job.title || job.url}\n${job.error?.message || ''}`);
-    // Point at the upload button; never upload anything on the user's behalf.
-    if (job.error?.hint === 'cookies') browser.runtime.openOptionsPage();
     tracked.delete(job.id);
   }
   if (job.state === 'cancelled') tracked.delete(job.id);
