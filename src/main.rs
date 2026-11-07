@@ -349,6 +349,9 @@ struct CreateReq {
     /// "browser" (default) or "nas" (NAS users only).
     #[serde(default)]
     target: Option<String>,
+    /// Queue every video in the link's playlist with these settings.
+    #[serde(default)]
+    playlist: bool,
 }
 
 #[post("/api/jobs")]
@@ -368,6 +371,26 @@ async fn api_create(req: HttpRequest, body: Json<CreateReq>, jobs: Data<Jobs>) -
         Some("auto") if user.nas => Target::Nas,
         _ => Target::Browser,
     };
+    if body.playlist {
+        let info = match jobs.probe(&url, &user.user).await {
+            Ok(i) => i,
+            Err(f) => return HttpResponse::UnprocessableEntity().json(f),
+        };
+        let Some(list) = &info.playlist else {
+            return bad("That link isn't a playlist.", "");
+        };
+        // One format can't fit every video, so each picks its own by the mode and size limit.
+        let views: Vec<_> = list
+            .entries
+            .iter()
+            .map(|(u, title)| {
+                let plan = Plan::Pick { mode: body.mode, cap: body.max_size, format: None };
+                jobs.submit_in(&user.user, u.clone(), target, plan, Some(list.title.clone()), title.clone())
+            })
+            .collect();
+        println!("{} queued {} videos from playlist {}", user.user, views.len(), list.title);
+        return HttpResponse::Ok().json(views);
+    }
     let plan = Plan::Pick { mode: body.mode, cap: body.max_size, format: body.format.clone().filter(|f| !f.is_empty()) };
     HttpResponse::Ok().json(jobs.submit(&user.user, url, target, plan))
 }

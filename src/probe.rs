@@ -14,6 +14,72 @@ pub struct Info {
     pub uploader: Option<String>,
     #[serde(skip)]
     pub formats: Vec<Fmt>,
+    /// Set when the link also names a playlist (YouTube's list=, a SoundCloud set, ...).
+    pub playlist: Option<Playlist>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Playlist {
+    pub title: String,
+    pub count: usize,
+    /// True when the link is only a playlist, with no single video of its own.
+    pub only: bool,
+    /// (url, title) per video.
+    #[serde(skip)]
+    pub entries: Vec<(String, Option<String>)>,
+}
+
+/// At most this many entries are queued from one playlist.
+pub const MAX_PLAYLIST: usize = 500;
+
+fn maybe_playlist(url: &str) -> bool {
+    let u = url.to_ascii_lowercase();
+    ["list=", "/playlist", "/sets/", "/album/"].iter().any(|k| u.contains(k))
+}
+
+/// Lists a playlist's entries without resolving each video (fast).
+async fn playlist(url: &str, user: &str) -> Option<Playlist> {
+    if !maybe_playlist(url) {
+        return None;
+    }
+    let mut args: Vec<String> = ["--no-colors", "--force-ipv4", "--yes-playlist", "--flat-playlist", "--dump-single-json"].map(String::from).to_vec();
+    args.extend(["--playlist-items".to_string(), format!("1:{MAX_PLAYLIST}")]);
+    if let Some(c) = cookies_for(user) {
+        args.extend(["--cookies".to_string(), c.display().to_string()]);
+    }
+    let out = tokio::process::Command::new("yt-dlp")
+        .args(&args)
+        .args(["--", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    if v["_type"] != "playlist" {
+        return None;
+    }
+    let entries: Vec<(String, Option<String>)> = v["entries"]
+        .as_array()?
+        .iter()
+        .filter_map(|e| {
+            let url = e["url"].as_str().or(e["webpage_url"].as_str()).filter(|u| u.starts_with("http"))?;
+            Some((url.to_string(), e["title"].as_str().map(String::from)))
+        })
+        .collect();
+    if entries.len() < 2 {
+        return None;
+    }
+    let lower = url.to_ascii_lowercase();
+    let only = !(lower.contains("v=") || lower.contains("youtu.be/") || lower.contains("/shorts/"));
+    Some(Playlist {
+        title: v["title"].as_str().unwrap_or("Playlist").to_string(),
+        count: entries.len(),
+        only,
+        entries,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,7 +173,19 @@ pub fn base_args(user: &str) -> Vec<String> {
     args
 }
 
+/// The link's video (or a playlist link's first video), plus its playlist if it has one.
 pub async fn probe(url: &str, user: &str) -> Result<Info, crate::errors::Failure> {
+    let list = playlist(url, user).await;
+    let video_url = match &list {
+        Some(p) if p.only => p.entries[0].0.as_str(),
+        _ => url,
+    };
+    let mut info = probe_video(video_url, user).await?;
+    info.playlist = list;
+    Ok(info)
+}
+
+async fn probe_video(url: &str, user: &str) -> Result<Info, crate::errors::Failure> {
     let out = tokio::process::Command::new("yt-dlp")
         .args(base_args(user))
         .args(["--dump-single-json", "--", url])
@@ -137,6 +215,7 @@ pub async fn probe(url: &str, user: &str) -> Result<Info, crate::errors::Failure
         site: raw.extractor_key.unwrap_or_else(|| "Generic".into()),
         uploader: raw.uploader,
         formats,
+        playlist: None,
     })
 }
 

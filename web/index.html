@@ -67,6 +67,11 @@
             <div id="pick-meta" class="muted"></div>
           </div>
 
+          <label class="check playlist" id="playlist-row" hidden>
+            <input type="checkbox" id="playlist">
+            <span>Queue the whole playlist: <b id="playlist-title"></b> <span id="playlist-count" class="muted"></span></span>
+          </label>
+
           <details id="advanced">
             <summary>Advanced</summary>
             <div class="adv">
@@ -86,6 +91,7 @@
         <div class="jobs-head">
           <h2>Downloads</h2>
           <span id="live" class="live" title="Live updates"></span>
+          <button type="button" id="clear-queued" class="ghost small-btn" hidden>Cancel queued</button>
         </div>
         <ul id="jobs" class="jobs"></ul>
         <p id="empty" class="muted empty">Nothing yet. Paste a link above.</p>

@@ -179,6 +179,14 @@ function showPreview() {
   $('sub').textContent = [i.uploader, i.site, clock(i.duration)].filter(Boolean).join(' · ');
   $('preview').hidden = false;
   $('options').hidden = false;
+  const pl = i.playlist;
+  $('playlist-row').hidden = !pl;
+  $('playlist').checked = !!pl?.only; // a playlist-only link means the playlist
+  if (pl) {
+    $('playlist-title').textContent = pl.title;
+    $('playlist-count').textContent = `(${pl.count}${pl.count >= 500 ? '+' : ''} videos)`;
+    if (pl.only) $('title').textContent = `${i.title} (first of ${pl.title})`;
+  }
   if (!PRESETS[preset]) preset = 'share';
   applyPreset(preset);
 }
@@ -223,6 +231,7 @@ $('original').addEventListener('change', () => {
   fillFormats(); update();
 });
 $('format').addEventListener('change', update);
+$('playlist').addEventListener('change', update);
 $('nas').addEventListener('change', update);
 
 function fillFormats() {
@@ -259,8 +268,19 @@ function update() {
   const audio = mode() === 'audio';
   $('size-block').hidden = audio;
   $('size-out').textContent = cap == null ? 'No limit' : size(cap);
+  const whole = !$('playlist-row').hidden && $('playlist').checked;
+  $('format').disabled = whole;
+  if (whole) $('format').value = '';
   const c = choose();
   const go = $('go');
+  if (whole) {
+    const n = probe.info.playlist.count;
+    $('pick-label').textContent = c ? `Each video: best that fits${cap == null ? '' : ` under ${size(cap)}`}` : 'Each video: best that fits';
+    $('pick-meta').textContent = `For example, this one: ${c ? `${c.label} · ${size(c.size, !c.exact)}` : 'nothing fits'}. Videos download one at a time.`;
+    go.disabled = false;
+    go.textContent = `Queue ${n} videos${$('nas').checked && me?.nas ? ' to NAS' : ''}`;
+    return;
+  }
   if (!c) {
     $('pick-label').textContent = 'Nothing fits under that size';
     $('pick-meta').textContent = 'Raise the limit, or pick a format under Advanced.';
@@ -294,11 +314,15 @@ $('url-form').addEventListener('submit', async (e) => {
       max_size: fmt ? null : cap,
       format: fmt || null,
       target: $('nas').checked && me?.nas ? 'nas' : 'browser',
+      playlist: !$('playlist-row').hidden && $('playlist').checked,
     };
-    const job = await api('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
-    mine.add(job.id);
+    if (body.playlist) { body.format = null; go.textContent = 'Queuing…'; }
+    const res = await api('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
+    for (const job of Array.isArray(res) ? res : [res]) {
+      mine.add(job.id);
+      upsert(job);
+    }
     sessionStorage.setItem('mine', JSON.stringify([...mine]));
-    upsert(job);
     $('url').value = '';
     resetProbe();
     $('url').focus();
@@ -343,7 +367,7 @@ const LABEL = { queued: 'Queued', fetching: 'Downloading', processing: 'Processi
 function subline(j) {
   const p = j.progress;
   switch (j.state) {
-    case 'queued': return 'In line, starts when a slot frees up';
+    case 'queued': return j.playlist ? `In line · from ${j.playlist}` : 'In line, starts when a slot frees up';
     case 'fetching':
       if (!p.downloaded) return j.choice ? `${j.choice} · starting` : 'Getting info';
       return [
@@ -363,6 +387,7 @@ function subline(j) {
 function render() {
   const list = [...jobs.values()].sort((a, b) => b.created - a.created);
   $('empty').hidden = list.length > 0;
+  $('clear-queued').hidden = list.filter((j) => j.state === 'queued').length < 2;
   const ul = $('jobs');
   const existing = new Map([...ul.children].map((li) => [li.dataset.id, li]));
   list.forEach((j, idx) => {
@@ -417,6 +442,12 @@ function render() {
   });
   for (const li of existing.values()) li.remove();
 }
+
+$('clear-queued').addEventListener('click', async () => {
+  const queued = [...jobs.values()].filter((j) => j.state === 'queued');
+  if (!confirm(`Cancel ${queued.length} queued downloads?`)) return;
+  for (const j of queued) await api(`/api/jobs/${j.id}`, { method: 'DELETE' }).catch(() => {});
+});
 
 // ---------- settings ----------
 function openSettings() {

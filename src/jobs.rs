@@ -103,6 +103,8 @@ pub struct View {
     pub error: Option<Failure>,
     pub filename: Option<String>,
     pub size: Option<u64>,
+    /// The playlist this job was queued from.
+    pub playlist: Option<String>,
     /// Unix seconds.
     pub created: u64,
     pub expires: Option<u64>,
@@ -198,6 +200,11 @@ impl Jobs {
     }
 
     pub fn submit(&self, owner: &str, url: String, target: Target, plan: Plan) -> View {
+        self.submit_in(owner, url, target, plan, None, None)
+    }
+
+    /// `known_title` shows in the list before the job has fetched its own info (playlist entries).
+    pub fn submit_in(&self, owner: &str, url: String, target: Target, plan: Plan, playlist: Option<String>, known_title: Option<String>) -> View {
         let id = uuid::Uuid::new_v4().to_string();
         let audio = match &plan {
             Plan::Legacy { audio, .. } => *audio,
@@ -205,7 +212,7 @@ impl Jobs {
         };
         // A recent probe of the same URL gives the list a title and picture right away.
         let known = self.probes.lock().unwrap().get(&format!("{owner}\n{url}")).map(|(_, i)| (i.title.clone(), i.thumbnail.clone()));
-        let (title, thumbnail) = known.map_or((None, None), |(t, th)| (Some(t), th));
+        let (title, thumbnail) = known.map_or((known_title, None), |(t, th)| (Some(t), th));
         let view = View {
             id: id.clone(),
             owner: owner.to_string(),
@@ -220,6 +227,7 @@ impl Jobs {
             error: None,
             filename: None,
             size: None,
+            playlist,
             created: now_unix(),
             expires: None,
         };
@@ -503,7 +511,8 @@ impl Jobs {
         if target == Target::Nas {
             cmd.arg("--embed-thumbnail");
         }
-        cmd.arg("--").arg(url).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        let fetch_url = info.as_ref().map(|i| i.url.as_str()).unwrap_or(url);
+        cmd.arg("--").arg(fetch_url).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
         let started = Instant::now();
         let mut child = cmd.spawn().map_err(|e| Failure::internal(format!("couldn't run yt-dlp: {e}")))?;

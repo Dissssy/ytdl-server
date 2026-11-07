@@ -42,7 +42,7 @@ Legacy, kept for old scripts: `GET /download` (NAS users only, returns a job id)
 `GET /check/{id}`, `GET /download_now`, `GET /get_info`.
 
 JSON, with `Authorization: Bearer KEY` or `?key=KEY`: `GET /api/me`,
-`POST /api/probe {url}`, `POST /api/jobs {url, mode: compat|best|audio, max_size?, format?, target: browser|nas|auto}`,
+`POST /api/probe {url}`, `POST /api/jobs {url, mode: compat|best|audio, max_size?, format?, target: browser|nas|auto, playlist?}` (playlist: true queues every entry, up to 500, and returns a list),
 `GET /api/jobs`, `GET /api/jobs/{id}`, `DELETE /api/jobs/{id}`,
 `GET /api/jobs/{id}/file`, `GET /api/events` (server-sent events),
 `POST /api/cookies` (cookies.txt as the body) and `DELETE /api/cookies`.
