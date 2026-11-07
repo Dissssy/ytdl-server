@@ -627,7 +627,10 @@ impl Jobs {
         let filename = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "download".into());
         match target {
             Target::Nas => {
-                let dir = if plan_is_audio(plan) { &config.audio_dir } else { &config.video_dir };
+                let base = if plan_is_audio(plan) { &config.audio_dir } else { &config.video_dir };
+                let playlist = self.jobs.lock().unwrap().get(id).and_then(|j| j.view.playlist.clone());
+                let dir = nas_dir(base, playlist.as_deref());
+                tokio::fs::create_dir_all(&dir).await.map_err(|e| Failure::internal(format!("creating {}: {e}", dir.display())))?;
                 let dest = dir.join(&filename);
                 move_file(&file, &dest).await.map_err(|e| Failure::internal(format!("moving to {}: {e}", dest.display())))?;
                 remove_workdir(id, &config.tmp_dir);
@@ -721,6 +724,27 @@ impl Jobs {
     }
 }
 
+/// Where a NAS download goes. The NAS folders follow yt-dlp's old `%(playlist)s` layout,
+/// where "NA" holds videos that aren't from a playlist: a playlist's videos go in a folder
+/// named after it, beside NA (or inside the configured folder if it isn't called NA).
+fn nas_dir(base: &Path, playlist: Option<&str>) -> PathBuf {
+    let Some(name) = playlist else { return base.to_path_buf() };
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .chars()
+        .take(120)
+        .collect();
+    let safe = if safe.is_empty() || safe == "NA" { "Playlist".to_string() } else { safe };
+    match (base.file_name().and_then(|n| n.to_str()), base.parent()) {
+        (Some("NA"), Some(parent)) => parent.join(safe),
+        _ => base.join(safe),
+    }
+}
+
 fn plan_is_audio(plan: &Plan) -> bool {
     match plan {
         Plan::Legacy { audio, .. } => *audio,
@@ -761,5 +785,18 @@ async fn update_ytdlp() {
             Ok(o) => println!("yt-dlp update failed: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")),
             Err(e) => println!("yt-dlp update failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nas_dir;
+    use std::path::Path;
+
+    #[test]
+    fn playlists_sit_beside_na() {
+        assert_eq!(nas_dir(Path::new("/mnt/Plex/YTDL/NA"), None), Path::new("/mnt/Plex/YTDL/NA"));
+        assert_eq!(nas_dir(Path::new("/mnt/Plex/YTDL/NA"), Some("Cool / Stuff")), Path::new("/mnt/Plex/YTDL/Cool _ Stuff"));
+        assert_eq!(nas_dir(Path::new("/mnt/Plex/YTDL/Video"), Some("Mix")), Path::new("/mnt/Plex/YTDL/Video/Mix"));
     }
 }
