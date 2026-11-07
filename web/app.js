@@ -125,6 +125,7 @@ const looksLikeUrl = (v) => /^https?:\/\/\S+\.\S+/i.test(v.trim());
 let probeTimer = 0;
 $('url').addEventListener('input', () => {
   clearTimeout(probeTimer);
+  $('empty').hidden = jobs.size > 0 || $('url').value.trim() !== '';
   const v = $('url').value;
   if (!v.trim()) return resetProbe();
   if (looksLikeUrl(v)) probeTimer = setTimeout(runProbe, 350);
@@ -145,6 +146,7 @@ async function runProbe() {
   const url = $('url').value.trim();
   if (!url) return;
   const seq = ++probeSeq;
+  $('empty').hidden = true;
   probe = null;
   $('options').hidden = true; $('preview').hidden = true; $('probe-error').hidden = true;
   $('skeleton').hidden = false;
@@ -386,7 +388,7 @@ function subline(j) {
 }
 function render() {
   const list = [...jobs.values()].sort((a, b) => b.created - a.created);
-  $('empty').hidden = list.length > 0;
+  $('empty').hidden = list.length > 0 || $('url').value.trim() !== '';
   $('clear-queued').hidden = list.filter((j) => j.state === 'queued').length < 2;
   const ul = $('jobs');
   const existing = new Map([...ul.children].map((li) => [li.dataset.id, li]));
